@@ -258,6 +258,7 @@ def run_experiment(period_name, exp_config):
     X_final = data_new[factor_cols]
 
     label_map = {
+        "temp_mean": "T2max",
         "NCHN_tp": "NCHN\nPrecip",
         "sm_avg": "SM\n(Avg)",
         "WNPSH": "WNPSH\n(Avg)",
@@ -478,7 +479,11 @@ def run_experiment(period_name, exp_config):
 
     fig_corr, ax_corr = plt.subplots(figsize=(10, 8))
 
-    corr_matrix = X_final.corr()
+    features_with_target = pd.concat(
+        [y_final.rename("temp_mean").reset_index(drop=True), X_final.reset_index(drop=True)],
+        axis=1,
+    )
+    corr_matrix = features_with_target.corr()
 
     clean_labels = [label_map.get(col, col).replace("\n", " ") for col in corr_matrix.columns]
     corr_matrix.columns = clean_labels
@@ -497,7 +502,7 @@ def run_experiment(period_name, exp_config):
         annot_kws={"size": 10},
     )
 
-    ax_corr.set_title(f"Feature Correlation Matrix ({model_name})", fontsize=16, pad=20)
+    ax_corr.set_title(f"Feature and T2max Correlation Matrix ({model_name})", fontsize=16, pad=20)
 
     plt.tight_layout()
     plt.savefig(
