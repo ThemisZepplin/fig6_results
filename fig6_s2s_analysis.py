@@ -156,6 +156,28 @@ sst_wp = sst_ds["sst"].sel(latitude=slice(15, 0), longitude=slice(125, 145))
 sst_io = sst_ds["sst"].sel(latitude=slice(10, -10), longitude=slice(60, 80))
 sst_grad_arr = extract_first_3day_mean(sst_wp) - extract_first_3day_mean(sst_io)
 
+# =============================================================================
+# 9. ERA5 观测基准数据
+# =============================================================================
+print("正在加载 ERA5 观测基准数据...")
+era5_file = "/data1/huangy/fig6/NC/MSE/T2m_era5_2023.6_NC.nc"
+_era5_ds = xr.open_dataset(era5_file)
+# 取数据集中第一个（亦即温度）变量
+_era5_var = list(_era5_ds.data_vars)[0]
+# ERA5 纬度坐标为降序（北→南），与 S2S GRIB 数据保持一致
+_era5_t2m = _era5_ds[_era5_var].sel(latitude=slice(44, 35), longitude=slice(114, 119))
+# 根据变量单位属性判断是否需要 K→°C 换算
+_units = _era5_ds[_era5_var].attrs.get("units", "")
+if _units.lower() in ("k", "kelvin") or (not _units and float(_era5_t2m.mean().values) > 200):
+    _era5_t2m = _era5_t2m - 273.15
+# 取逐日最高气温（若已为逐日数据则 resample 不改变结果）
+_era5_daily = _era5_t2m.resample(time="1D").max()
+# 仅保留研究时段（2023-06-14 至 2023-06-24）
+_era5_study = _era5_daily.sel(time=slice(study_start, study_end))
+# 取研究区域空间均值，得到形状 (n_days,) 的 1-D 数组
+_spatial_dims = [d for d in _era5_study.dims if d != "time"]
+era5_obs_ts = _era5_study.mean(dim=_spatial_dims).values  # shape: (n_days,)
+
 
 # =============================================================================
 # 公共处理函数
@@ -449,6 +471,17 @@ def run_experiment(period_name, exp_config):
         lw=2.5,
         zorder=5,
         label="Predicted $T_{max}$ (Ensemble Mean)",
+    )
+
+    # 绘制 ERA5 观测基准（黑色实线）
+    ax_ts.plot(
+        plot_dates,
+        era5_obs_ts,
+        marker="^",
+        color="black",
+        lw=2.5,
+        zorder=6,
+        label="ERA5 Observation",
     )
 
     ax_ts.set_title(f"Time Series Evolution ({model_name})", fontsize=16, pad=15)
