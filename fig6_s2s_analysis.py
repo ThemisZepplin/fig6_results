@@ -166,9 +166,23 @@ _era5_ds = xr.open_dataset(era5_file)
 _era5_var = list(_era5_ds.data_vars)[0]
 # ERA5 纬度坐标为降序（北→南），与 S2S GRIB 数据保持一致
 _era5_t2m = _era5_ds[_era5_var].sel(latitude=slice(44, 35), longitude=slice(114, 119))
+# 自动检测时间维度名称（ERA5 可能为 "time" 或 "valid_time" 等）
+_time_dim = next(
+    (d for d in _era5_t2m.dims if "time" in d.lower()),
+    None,
+)
+if _time_dim is None:
+    raise ValueError(
+        f"无法在 ERA5 变量 '{_era5_var}' 的维度 {list(_era5_t2m.dims)} 中找到时间维度，"
+        "请确认数据文件格式。"
+    )
+# 若时间维度名不是 "time"，重命名为 "time" 以统一后续操作
+if _time_dim != "time":
+    _era5_t2m = _era5_t2m.rename({_time_dim: "time"})
 # 根据变量单位属性判断是否需要 K→°C 换算
 _units = _era5_ds[_era5_var].attrs.get("units", "")
-if _units.lower() in ("k", "kelvin") or (not _units and float(_era5_t2m.mean().values) > 200):
+_sample_val = float(_era5_t2m.isel({d: 0 for d in _era5_t2m.dims}).values)
+if _units.lower() in ("k", "kelvin") or (not _units and _sample_val > 200):
     _era5_t2m = _era5_t2m - 273.15
 # 取逐日最高气温（若已为逐日数据则 resample 不改变结果）
 _era5_daily = _era5_t2m.resample(time="1D").max()
