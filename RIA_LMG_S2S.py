@@ -44,6 +44,7 @@ start_date = "2023-06-12"
 start_time = pd.Timestamp(start_date)
 study_start = pd.Timestamp("2023-06-14")
 study_end = pd.Timestamp("2023-06-24")
+_N_STUDY_DAYS = (study_end - study_start).days + 1  # 研究时段总天数（含首尾）= 11
 
 FACTOR_COLS = [
     "NCHN_tp",
@@ -503,7 +504,9 @@ ncvi_arr = extract_first_3day_mean(pv_region)
 
 # ISM（印度夏季风降水）
 ism_ds = xr.open_dataset(
-    f"{dir_s2s_antecedent}ecmf_pf_228228_2023-06.grib", engine="cfgrib"
+    f"{dir_s2s_antecedent}ecmf_pf_228228_2023-06.grib",
+    engine="cfgrib",
+    backend_kwargs={"errors": "ignore"},  # 跳过文件末尾损坏的 GRIB 消息，不打印回溯
 )
 ism_region = ism_ds["tp"].sel(latitude=slice(25, 5), longitude=slice(65, 85))
 ism_arr = extract_first_3day_mean(ism_region)
@@ -571,41 +574,88 @@ def extract_period_mean(daily_data, is_reforecast=False):
 
 
 def extract_daily_timeseries(daily_data, is_reforecast=False):
-    """提取集合均值的逐日时间序列，返回形状 (n_days,) 的数组。
+    """提取集合均值的逐日时间序列，返回形状 (_N_STUDY_DAYS,) 的数组。
 
     日期映射规则同 extract_period_mean：valid_time = start_time + step_timedelta
     研究时段 2023-06-14 ~ 2023-06-24 对应 step 2d ~ 12d（瞬时数据）
     或 step 2d ~ 12d（日均数据，step 从 1d 开始时同样覆盖该时段）。
+
+    当输入数据的步长范围不足以覆盖完整研究时段（如高空文件步长较短）时，
+    缺失日期以 NaN 填充，确保返回长度始终为 _N_STUDY_DAYS，
+    避免不同变量数组长度不一致导致 DataFrame 构建失败。
     """
     step_vals = daily_data.step
     # 使用 step 的 timedelta 值直接推算有效日期
     dates = [start_time + pd.Timedelta(sv) for sv in step_vals.values]
     dates_ts = pd.to_datetime(dates)
-    selected = daily_data.sel(
-        step=[s for s, d in zip(step_vals.values, dates_ts) if study_start <= d <= study_end]
-    )
+    avail_pairs = [
+        (s, d) for s, d in zip(step_vals.values, dates_ts)
+        if study_start <= d <= study_end
+    ]
+
+    if not avail_pairs:
+        return np.full(_N_STUDY_DAYS, np.nan)
+
+    avail_steps, _ = zip(*avail_pairs)
+    selected = daily_data.sel(step=list(avail_steps))
     dims_to_mean = [d for d in selected.dims if d != "step"]
-    return selected.mean(dim=dims_to_mean).values.flatten()
+    avail_values = selected.mean(dim=dims_to_mean).values.flatten()  # shape: (n_avail,)
+
+    if len(avail_values) == _N_STUDY_DAYS:
+        return avail_values
+
+    # 缺失日期用 NaN 填充，确保输出长度始终为 _N_STUDY_DAYS
+    result = np.full(_N_STUDY_DAYS, np.nan)
+    study_start_day = (study_start - start_time).days
+    for i, step in enumerate(avail_steps):
+        day_idx = int(pd.Timedelta(step).days) - study_start_day
+        if 0 <= day_idx < _N_STUDY_DAYS:
+            result[day_idx] = avail_values[i]
+    return result
 
 
 def extract_daily_timeseries_per_member(daily_data):
-    """提取每个集合成员的逐日时间序列，返回形状 (n_members, n_days) 的数组。
+    """提取每个集合成员的逐日时间序列，返回形状 (n_members, _N_STUDY_DAYS) 的数组。
 
     日期映射规则同 extract_period_mean：valid_time = start_time + step_timedelta
     保留 number 维（每成员），step 维按研究时段筛选后保留。
+
+    当输入数据步长不足以覆盖完整研究时段时，缺失日期以 NaN 填充，
+    确保列数（天数）始终为 _N_STUDY_DAYS。
     """
     step_vals = daily_data.step
     # 使用 step 的 timedelta 值直接推算有效日期
     dates = [start_time + pd.Timedelta(sv) for sv in step_vals.values]
     dates_ts = pd.to_datetime(dates)
-    selected = daily_data.sel(
-        step=[s for s, d in zip(step_vals.values, dates_ts) if study_start <= d <= study_end]
-    )
+    avail_pairs = [
+        (s, d) for s, d in zip(step_vals.values, dates_ts)
+        if study_start <= d <= study_end
+    ]
+
+    if not avail_pairs:
+        n_members = daily_data.sizes.get("number", 1)
+        return np.full((n_members, _N_STUDY_DAYS), np.nan)
+
+    avail_steps, _ = zip(*avail_pairs)
+    selected = daily_data.sel(step=list(avail_steps))
     dims_to_mean = [d for d in selected.dims if d not in ("step", "number")]
-    result = selected.mean(dim=dims_to_mean) if dims_to_mean else selected
-    if "number" in result.dims and "step" in result.dims:
-        result = result.transpose("number", "step")
-    return result.values  # shape: (n_members, n_days)
+    result_sel = selected.mean(dim=dims_to_mean) if dims_to_mean else selected
+    if "number" in result_sel.dims and "step" in result_sel.dims:
+        result_sel = result_sel.transpose("number", "step")
+    avail_values = result_sel.values  # shape: (n_members, n_avail_steps)
+
+    if avail_values.shape[1] == _N_STUDY_DAYS:
+        return avail_values
+
+    # 缺失日期用 NaN 填充，确保列数为 _N_STUDY_DAYS
+    n_members = avail_values.shape[0]
+    result = np.full((n_members, _N_STUDY_DAYS), np.nan)
+    study_start_day = (study_start - start_time).days
+    for i, step in enumerate(avail_steps):
+        day_idx = int(pd.Timedelta(step).days) - study_start_day
+        if 0 <= day_idx < _N_STUDY_DAYS:
+            result[:, day_idx] = avail_values[:, i]
+    return result  # shape: (n_members, _N_STUDY_DAYS)
 
 
 # =============================================================================
