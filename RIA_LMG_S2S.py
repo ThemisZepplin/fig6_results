@@ -96,6 +96,65 @@ swanlab.init(
 )
 
 # =============================================================================
+# 数据验证工具函数
+# =============================================================================
+def _validate_dataset(ds: xr.Dataset, ds_name: str) -> None:
+    """验证数据集的起报时间和预报时段覆盖范围。
+
+    检查项：
+      1. 起报时间坐标（time / forecast_reference_time / valid_time / date）应为 start_date。
+      2. 通过 step 坐标推算的有效时刻（start_time + step）应覆盖
+         study_start（2023-06-14）至 study_end（2023-06-24）。
+
+    若验证失败则发出 UserWarning；通过则打印确认信息。
+    """
+    # --- 1. 起报时间验证 ---
+    init_time_found = False
+    for coord_name in ("time", "forecast_reference_time", "valid_time", "date"):
+        if coord_name in ds.coords:
+            raw = ds.coords[coord_name].values
+            t_val = pd.Timestamp(raw.flat[0] if np.ndim(raw) > 0 else raw)
+            expected = pd.Timestamp(start_date)
+            if t_val.date() != expected.date():
+                warnings.warn(
+                    f"[{ds_name}] 起报时间验证失败：期望 {start_date}，"
+                    f"实际坐标 '{coord_name}' = {t_val.date()}",
+                    UserWarning,
+                    stacklevel=2,
+                )
+            else:
+                print(f"  ✓ [{ds_name}] 起报时间验证通过：{t_val.date()}")
+            init_time_found = True
+            break
+    if not init_time_found:
+        warnings.warn(
+            f"[{ds_name}] 未找到起报时间坐标（time / forecast_reference_time 等），跳过起报时间验证。",
+            UserWarning,
+            stacklevel=2,
+        )
+
+    # --- 2. 预报时段覆盖验证 ---
+    if "step" in ds.coords:
+        step_vals = ds.coords["step"].values
+        valid_dates = pd.to_datetime(
+            [start_time + pd.Timedelta(s) for s in step_vals]
+        )
+        if not (valid_dates.min() <= study_start and valid_dates.max() >= study_end):
+            warnings.warn(
+                f"[{ds_name}] 预报时段覆盖不足：研究时段 "
+                f"{study_start.date()} ~ {study_end.date()}，"
+                f"数据有效时刻范围 {valid_dates.min().date()} ~ {valid_dates.max().date()}",
+                UserWarning,
+                stacklevel=2,
+            )
+        else:
+            print(
+                f"  ✓ [{ds_name}] 预报时段验证通过："
+                f"覆盖 {study_start.date()} ~ {study_end.date()}"
+            )
+
+
+# =============================================================================
 # 1. 加载气象数据
 # =============================================================================
 print("正在加载基础变量数据 (S2S)...")
@@ -127,6 +186,7 @@ print("正在加载基础变量数据 (S2S)...")
 # 研究时段对应 step 2d（2023-06-14）~ 12d（2023-06-24）
 tmxfile = "/data1/huangy/fig6/NC/2023-06/ecmf_rel_pf_sfc_mx2t6_2023-06.grb"
 tmx_ds = xr.open_dataset(tmxfile, engine="cfgrib")
+_validate_dataset(tmx_ds, "mx2t6 (tmx)")
 tmx = tmx_ds["mx2t6"].loc[:, start_date, :, 44:35, 114:119] - 273.16
 daily_max_tmx = tmx.resample(step="D").max()
 
@@ -136,6 +196,7 @@ daily_max_tmx = tmx.resample(step="D").max()
 # 研究时段对应 step 2d（2023-06-14）~ 12d（2023-06-24）
 smfile = "/data1/huangy/fig6/NC/2023-06/ecmf_rel_pf_sfc_sm2023-06.grb"
 sm_ds = xr.open_dataset(smfile, engine="cfgrib")
+_validate_dataset(sm_ds, "sm20 (soil moisture)")
 sm = sm_ds["sm20"].loc[:, start_date, :, 44:35, 114:119]
 daily_max_sm = sm.resample(step="D").max()
 
@@ -145,6 +206,7 @@ daily_max_sm = sm.resample(step="D").max()
 # diff 后 step[0] 对应 NaN；研究时段起始 step 2d 对应 2023-06-14
 tpfile = "/data1/huangy/fig6/NC/2023-06/ecmf_rel_pf_sfc_tp2023-06.grb"
 tp_ds = xr.open_dataset(tpfile, engine="cfgrib")
+_validate_dataset(tp_ds, "tp (NCHN precipitation)")
 NCHN_tp_data = tp_ds["tp"].loc[:, start_date, :, 44:35, 114:119]
 daily_max_NCHNtp = NCHN_tp_data.resample(step="D").max().diff(dim="step")
 
@@ -154,8 +216,10 @@ daily_max_NCHNtp = NCHN_tp_data.resample(step="D").max().diff(dim="step")
 # 研究时段对应 step 2d（2023-06-14）~ 12d（2023-06-24）
 zfile = "/data1/huangy/fig6/NC/2023-06/ecmf_rel_pf_pl_zqt2023-06.grb"
 z_ds = xr.open_dataset(zfile, engine="cfgrib")
+_validate_dataset(z_ds, "gh z500/z850")
 reforecastfile = f"/data1/huangy/fig6/NC/pl_z03_22/merged_{start_date}.nc"
 reforecast = xr.open_dataset(reforecastfile)
+_validate_dataset(reforecast, "z500 reforecast (climatology)")
 
 z_NCHN = z_ds["gh"].loc[:, start_date, :, 500, 44:35, 114:119]
 daily_max_z_NCHN = z_NCHN.resample(step="D").max()
@@ -172,6 +236,7 @@ daily_max_z_WNPSH = z_WNPSH.resample(step="D").max()
 # 研究时段对应 step 2d（2023-06-14）~ 12d（2023-06-24）
 ssr_file = "/data1/huangy/fig6/NC/2023-06/ecmf_rel_pf_sfc_radiation2023-06.grb"
 ssr_ds = xr.open_dataset(ssr_file, engine="cfgrib")
+_validate_dataset(ssr_ds, "ssr (SSR_Avg)")
 ssr = ssr_ds["ssr"].loc[:, start_date, :, 44:35, 114:119]
 daily_mean_ssr = ssr.resample(step="D").mean()
 
@@ -181,6 +246,7 @@ daily_mean_ssr = ssr.resample(step="D").mean()
 # 研究时段对应 step 2d（2023-06-14）~ 12d（2023-06-24）
 sshf_file = "/data1/huangy/fig6/NC/2023-06/ecmf_rel_pf_sfc_hflux2023-06.grb"
 sshf_ds = xr.open_dataset(sshf_file, engine="cfgrib")
+_validate_dataset(sshf_ds, "sshf (SHF_Avg)")
 sshf = sshf_ds["sshf"].loc[:, start_date, :, 44:35, 114:119]
 daily_mean_sshf = sshf.resample(step="D").mean()
 
@@ -320,11 +386,13 @@ def _daily_mean_sp(sp_inst: xr.DataArray) -> xr.DataArray:
 t2m_sfc_ds = xr.open_dataset(
     "/data1/huangy/fig6/NC/MSE/ecmf_pf_sfc_2t_2023-06.grib", engine="cfgrib"
 )
+_validate_dataset(t2m_sfc_ds, "2t (t2m)")
 t2m_sfc = t2m_sfc_ds["t2m"].loc[:, start_date, :, 44:35, 114:119]  # K, daily-mean steps
 
 td2m_sfc_ds = xr.open_dataset(
     "/data1/huangy/fig6/NC/MSE/ecmf_pf_sfc_2td_2023-06.grib", engine="cfgrib"
 )
+_validate_dataset(td2m_sfc_ds, "2td (d2m)")
 td2m_sfc = td2m_sfc_ds["d2m"].loc[:, start_date, :, 44:35, 114:119]  # K, daily-mean steps
 
 # 每个 step 值本身已是日均窗口（resample 等效于原值，保留以维持代码风格一致性）
@@ -340,6 +408,7 @@ daily_mean_td2m = td2m_sfc.resample(step="D").mean()  # K
 sp_inst_ds = xr.open_dataset(
     "/data1/huangy/fig6/NC/MSE/ecmf_pf_sfc_sp_2023-06.grib", engine="cfgrib"
 )
+_validate_dataset(sp_inst_ds, "sp (surface pressure)")
 sp_inst = sp_inst_ds["sp"].loc[:, start_date, :, 44:35, 114:119]  # Pa, instantaneous
 # 用相邻瞬时值均值构造日均 sp proxy，step 坐标对齐到 daily_mean_t2m
 daily_mean_sp = _daily_mean_sp(sp_inst)  # Pa, daily-mean proxy
@@ -359,6 +428,8 @@ daily_mean_sp = _daily_mean_sp(sp_inst)  # Pa, daily-mean proxy
 orog_ds = xr.open_dataset(
     "/data1/huangy/fig6/NC/MSE/ecmf_cf_orog_2023-06.grib", engine="cfgrib"
 )
+# orography 为静态场，无 step 覆盖需求；仅验证起报时间坐标（如有）。
+_validate_dataset(orog_ds, "orog (static orography)")
 # 实际变量名为 "orog"（cfgrib 读取 param 228 时映射为该名称）
 _orog_raw = orog_ds["orog"].sel(latitude=slice(44, 35), longitude=slice(114, 119))
 # 若含多余维（time 等），压缩为 (latitude, longitude)
@@ -411,12 +482,16 @@ mse_s_daily = cp * daily_mean_t2m + Lv * q2m_proxy + gz_s  # J/kg, daily-mean MS
 # NOTE: 压力层文件 "ecmf_pl{lev}_130/156_2023-06.grib" 与主预报使用相同年月。
 mse_star_by_level: dict = {}
 for _lev in MSE_LEVELS:
-    _t_lev = xr.open_dataset(
+    _t_ds = xr.open_dataset(
         f"/data1/huangy/fig6/NC/MSE/ecmf_pl{_lev}_130_2023-06.grib", engine="cfgrib"
-    )["t"].loc[:, start_date, :, 44:35, 114:119]  # K
-    _z_lev = xr.open_dataset(
+    )
+    _validate_dataset(_t_ds, f"T@{_lev}hPa (param 130)")
+    _t_lev = _t_ds["t"].loc[:, start_date, :, 44:35, 114:119]  # K
+    _z_ds = xr.open_dataset(
         f"/data1/huangy/fig6/NC/MSE/ecmf_pl{_lev}_156_2023-06.grib", engine="cfgrib"
-    )["gh"].loc[:, start_date, :, 44:35, 114:119]  # m（geopotential height, param 156）
+    )
+    _validate_dataset(_z_ds, f"gh@{_lev}hPa (param 156)")
+    _z_lev = _z_ds["gh"].loc[:, start_date, :, 44:35, 114:119]  # m（geopotential height, param 156）
     _qs_lev = _qsat(_t_lev, float(_lev))
     # MSE*_lev = cp*T + Lv*qsat(T,p) + g*gh  （gh 为几何高度 m，g*gh 为势能 m^2/s^2）
     mse_star_by_level[_lev] = cp * _t_lev + Lv * _qs_lev + g * _z_lev  # J/kg
@@ -498,6 +573,7 @@ def extract_first_3day_mean(data_array: xr.DataArray) -> np.ndarray:
 
 # NCVI（华北冷涡 PV）
 pv_ds = xr.open_dataset(f"{dir_s2s_antecedent}ecmf_pf_60_2023-06.grib", engine="cfgrib")
+_validate_dataset(pv_ds, "pv (NCVI)")
 pv_region = pv_ds["pv"].sel(latitude=slice(43, 36), longitude=slice(113, 122))
 ncvi_arr = extract_first_3day_mean(pv_region)
 
@@ -507,6 +583,7 @@ ism_ds = xr.open_dataset(
     engine="cfgrib",
     backend_kwargs={"errors": "ignore"},  # 跳过文件末尾损坏的 GRIB 消息，不打印回溯
 )
+_validate_dataset(ism_ds, "tp (ISM)")
 ism_region = ism_ds["tp"].sel(latitude=slice(25, 5), longitude=slice(65, 85))
 ism_arr = extract_first_3day_mean(ism_region)
 
@@ -514,6 +591,7 @@ ism_arr = extract_first_3day_mean(ism_region)
 sst_ds = xr.open_dataset(
     f"{dir_s2s_antecedent}ecmf_pf_34_2023-06.grib", engine="cfgrib"
 )
+_validate_dataset(sst_ds, "sst (SST_Grad)")
 sst_wp = sst_ds["sst"].sel(latitude=slice(15, 0), longitude=slice(125, 145))
 sst_io = sst_ds["sst"].sel(latitude=slice(10, -10), longitude=slice(60, 80))
 sst_grad_arr = extract_first_3day_mean(sst_wp) - extract_first_3day_mean(sst_io)
@@ -523,6 +601,9 @@ sst_grad_arr = extract_first_3day_mean(sst_wp) - extract_first_3day_mean(sst_io)
 # =============================================================================
 print("正在加载 ERA5 观测基准数据...")
 era5_file = "/data1/huangy/fig6/NC/MSE/T2m_era5_2023.6_NC.nc"
+# ERA5 为再分析观测资料，时间轴为日历时间（非起报 + step 结构），
+# 不适用 _validate_dataset 的起报时间 / step 覆盖检查；
+# 时段覆盖由下方 _era5_study = _era5_daily.sel(time=slice(...)) 隐式保证。
 _era5_ds = xr.open_dataset(era5_file)
 _era5_var = list(_era5_ds.data_vars)[0]
 _era5_t2m = _era5_ds[_era5_var].sel(latitude=slice(44, 35), longitude=slice(114, 119))
