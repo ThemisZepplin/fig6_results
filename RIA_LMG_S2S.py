@@ -318,12 +318,12 @@ def _daily_mean_sp(sp_inst: xr.DataArray) -> xr.DataArray:
 # TODO: 确认文件路径；ECMWF param 167 = 2m temperature (t2m), param 168 = 2m dewpoint (d2m)
 # TODO: 确认变量名（cfgrib 读取后通常为 "t2m" 和 "d2m"；可运行 list(ds.data_vars) 核验）
 t2m_sfc_ds = xr.open_dataset(
-    "/data1/huangy/fig6/NC/2023-06/ecmf_rel_pf_sfc_2t_2023-06.grb", engine="cfgrib"
+    "/data1/huangy/fig6/NC/MSE/ecmf_pf_sfc_2t_2023-06.grib", engine="cfgrib"
 )
 t2m_sfc = t2m_sfc_ds["t2m"].loc[:, start_date, :, 44:35, 114:119]  # K, daily-mean steps
 
 td2m_sfc_ds = xr.open_dataset(
-    "/data1/huangy/fig6/NC/2023-06/ecmf_rel_pf_sfc_2d_2023-06.grb", engine="cfgrib"
+    "/data1/huangy/fig6/NC/MSE/ecmf_pf_sfc_2td_2023-06.grib", engine="cfgrib"
 )
 td2m_sfc = td2m_sfc_ds["d2m"].loc[:, start_date, :, 44:35, 114:119]  # K, daily-mean steps
 
@@ -338,7 +338,7 @@ daily_mean_td2m = td2m_sfc.resample(step="D").mean()  # K
 # TODO: 确认文件路径；ECMWF param 134 = surface pressure (sp)
 # TODO: 确认变量名（cfgrib 读取后通常为 "sp"）
 sp_inst_ds = xr.open_dataset(
-    "/data1/huangy/fig6/NC/2023-06/ecmf_rel_pf_sfc_sp_2023-06.grb", engine="cfgrib"
+    "/data1/huangy/fig6/NC/MSE/ecmf_pf_sfc_sp_2023-06.grib", engine="cfgrib"
 )
 sp_inst = sp_inst_ds["sp"].loc[:, start_date, :, 44:35, 114:119]  # Pa, instantaneous
 # 用相邻瞬时值均值构造日均 sp proxy，step 坐标对齐到 daily_mean_t2m
@@ -408,15 +408,14 @@ mse_s_daily = cp * daily_mean_t2m + Lv * q2m_proxy + gz_s  # J/kg, daily-mean MS
 #       若实际文件中 "gh" 为 geopotential (m^2/s^2)，请将下方 g * _z_lev 改为 _z_lev。
 # TODO: 加载后确认量级：~百至千 m → 几何高度（gpm）；~万级 → geopotential (m^2/s^2)
 # TODO: 确认 300 hPa 层数据文件存在（ecmf_pl300_130_*.grib 和 ecmf_pl300_156_*.grib）
-# NOTE: 文件名中 "2022-08" 与当前预报 "2023-06" 不同；
-#       该命名可能对应再预报（reforecast）气候态档案，请确认数据来源。
+# NOTE: 压力层文件 "ecmf_pl{lev}_130/156_2023-06.grib" 与主预报使用相同年月。
 mse_star_by_level: dict = {}
 for _lev in MSE_LEVELS:
     _t_lev = xr.open_dataset(
-        f"/data1/huangy/fig6/NC/MSE/ecmf_pl{_lev}_130_2022-08.grib", engine="cfgrib"
+        f"/data1/huangy/fig6/NC/MSE/ecmf_pl{_lev}_130_2023-06.grib", engine="cfgrib"
     )["t"].loc[:, start_date, :, 44:35, 114:119]  # K
     _z_lev = xr.open_dataset(
-        f"/data1/huangy/fig6/NC/MSE/ecmf_pl{_lev}_156_2022-08.grib", engine="cfgrib"
+        f"/data1/huangy/fig6/NC/MSE/ecmf_pl{_lev}_156_2023-06.grib", engine="cfgrib"
     )["gh"].loc[:, start_date, :, 44:35, 114:119]  # m（geopotential height, param 156）
     _qs_lev = _qsat(_t_lev, float(_lev))
     # MSE*_lev = cp*T + Lv*qsat(T,p) + g*gh  （gh 为几何高度 m，g*gh 为势能 m^2/s^2）
