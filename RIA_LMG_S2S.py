@@ -98,43 +98,62 @@ swanlab.init(
 # =============================================================================
 # 数据验证工具函数
 # =============================================================================
-def _validate_dataset(ds: xr.Dataset, ds_name: str) -> None:
+def _validate_dataset(
+    ds: xr.Dataset,
+    ds_name: str,
+    skip_init_check: bool = False,
+    skip_coverage_check: bool = False,
+) -> None:
     """验证数据集的起报时间和预报时段覆盖范围。
 
     检查项：
-      1. 起报时间坐标（time / forecast_reference_time / valid_time / date）应为 start_date。
+      1. 起报时间坐标（time / forecast_reference_time / valid_time / date）中需包含 start_date。
+         月度 GRIB 文件含多个起报时刻（如 2023-06-01…2023-06-30），仅需 start_date 在其中即可。
+         若 skip_init_check=True（如多年再预报气候态数据），跳过此项。
       2. 通过 step 坐标推算的有效时刻（start_time + step）应覆盖
          study_start（2023-06-14）至 study_end（2023-06-24）。
+         若 skip_coverage_check=True（如仅取前 3 天的前兆因子数据），跳过此项。
 
     若验证失败则发出 UserWarning；通过则打印确认信息。
     """
     # --- 1. 起报时间验证 ---
-    init_time_found = False
-    for coord_name in ("time", "forecast_reference_time", "valid_time", "date"):
-        if coord_name in ds.coords:
-            raw = ds.coords[coord_name].values
-            t_val = pd.Timestamp(raw.flat[0] if np.ndim(raw) > 0 else raw)
-            expected = pd.Timestamp(start_date)
-            if t_val.date() != expected.date():
-                warnings.warn(
-                    f"[{ds_name}] 起报时间验证失败：期望 {start_date}，"
-                    f"实际坐标 '{coord_name}' = {t_val.date()}",
-                    UserWarning,
-                    stacklevel=2,
-                )
-            else:
-                print(f"  ✓ [{ds_name}] 起报时间验证通过：{t_val.date()}")
-            init_time_found = True
-            break
-    if not init_time_found:
-        warnings.warn(
-            f"[{ds_name}] 未找到起报时间坐标（time / forecast_reference_time 等），跳过起报时间验证。",
-            UserWarning,
-            stacklevel=2,
-        )
+    if skip_init_check:
+        print(f"  ─ [{ds_name}] 跳过起报时间验证（气候态/多年再预报数据）")
+    else:
+        init_time_found = False
+        for coord_name in ("time", "forecast_reference_time", "valid_time", "date"):
+            if coord_name in ds.coords:
+                raw = ds.coords[coord_name].values
+                # 支持标量和数组坐标：搜索整个时间数组，而非仅取首值
+                times = pd.to_datetime(raw.flat if np.ndim(raw) > 0 else [raw])
+                expected = pd.Timestamp(start_date)
+                date_set = {t.date() for t in times}
+                if expected.date() not in date_set:
+                    warnings.warn(
+                        f"[{ds_name}] 起报时间验证失败：期望 {start_date}，"
+                        f"坐标 '{coord_name}' 未包含该日期"
+                        f"（范围 {times.min().date()} ~ {times.max().date()}）",
+                        UserWarning,
+                        stacklevel=2,
+                    )
+                else:
+                    print(
+                        f"  ✓ [{ds_name}] 起报时间验证通过："
+                        f"{expected.date()} 存在于 '{coord_name}' 坐标中"
+                    )
+                init_time_found = True
+                break
+        if not init_time_found:
+            warnings.warn(
+                f"[{ds_name}] 未找到起报时间坐标（time / forecast_reference_time 等），跳过起报时间验证。",
+                UserWarning,
+                stacklevel=2,
+            )
 
     # --- 2. 预报时段覆盖验证 ---
-    if "step" in ds.coords:
+    if skip_coverage_check:
+        print(f"  ─ [{ds_name}] 跳过预报时段覆盖验证（前兆因子数据，仅需前 3 步）")
+    elif "step" in ds.coords:
         step_vals = ds.coords["step"].values
         valid_dates = pd.to_datetime(
             [start_time + pd.Timedelta(s) for s in step_vals]
@@ -219,7 +238,7 @@ z_ds = xr.open_dataset(zfile, engine="cfgrib")
 _validate_dataset(z_ds, "gh z500/z850")
 reforecastfile = f"/data1/huangy/fig6/NC/pl_z03_22/merged_{start_date}.nc"
 reforecast = xr.open_dataset(reforecastfile)
-_validate_dataset(reforecast, "z500 reforecast (climatology)")
+_validate_dataset(reforecast, "z500 reforecast (climatology)", skip_init_check=True)
 
 z_NCHN = z_ds["gh"].loc[:, start_date, :, 500, 44:35, 114:119]
 daily_max_z_NCHN = z_NCHN.resample(step="D").max()
@@ -573,7 +592,7 @@ def extract_first_3day_mean(data_array: xr.DataArray) -> np.ndarray:
 
 # NCVI（华北冷涡 PV）
 pv_ds = xr.open_dataset(f"{dir_s2s_antecedent}ecmf_pf_60_2023-06.grib", engine="cfgrib")
-_validate_dataset(pv_ds, "pv (NCVI)")
+_validate_dataset(pv_ds, "pv (NCVI)", skip_coverage_check=True)
 pv_region = pv_ds["pv"].sel(latitude=slice(43, 36), longitude=slice(113, 122))
 ncvi_arr = extract_first_3day_mean(pv_region)
 
@@ -583,7 +602,7 @@ ism_ds = xr.open_dataset(
     engine="cfgrib",
     backend_kwargs={"errors": "ignore"},  # 跳过文件末尾损坏的 GRIB 消息，不打印回溯
 )
-_validate_dataset(ism_ds, "tp (ISM)")
+_validate_dataset(ism_ds, "tp (ISM)", skip_coverage_check=True)
 ism_region = ism_ds["tp"].sel(latitude=slice(25, 5), longitude=slice(65, 85))
 ism_arr = extract_first_3day_mean(ism_region)
 
@@ -591,7 +610,7 @@ ism_arr = extract_first_3day_mean(ism_region)
 sst_ds = xr.open_dataset(
     f"{dir_s2s_antecedent}ecmf_pf_34_2023-06.grib", engine="cfgrib"
 )
-_validate_dataset(sst_ds, "sst (SST_Grad)")
+_validate_dataset(sst_ds, "sst (SST_Grad)", skip_coverage_check=True)
 sst_wp = sst_ds["sst"].sel(latitude=slice(15, 0), longitude=slice(125, 145))
 sst_io = sst_ds["sst"].sel(latitude=slice(10, -10), longitude=slice(60, 80))
 sst_grad_arr = extract_first_3day_mean(sst_wp) - extract_first_3day_mean(sst_io)
