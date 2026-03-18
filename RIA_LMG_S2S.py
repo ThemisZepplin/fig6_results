@@ -145,15 +145,28 @@ daily_mean_sshf = sshf.resample(step="D").mean()
 
 # 1g. MSE 热力因子框架（Li & Tamarin-Brodsky, Sci Adv 2026）
 # -----------------------------------------------------------------------
+# 数据约束说明（S2S ECMWF perturbed forecast 数据现实情况）：
+#   - 2t (param 167)、2d (param 168)：daily-averaged step（每步代表 24h 均值，如 0-24h、24-48h）
+#   - sp (param 134)：instantaneous step（瞬时量，如 0h、24h、48h）
+#   - 地面位势（orography）：无逐成员预报，使用控制成员(cf)的静态 orography
+#   因此，以下 MSEs_2m 为 daily-mean 2m MSE proxy，
+#   非严格意义上的逐时峰值 MSEs（但与 Li & Tamarin-Brodsky 2026 原始定义最接近）。
+#
 # 物理常数
-cp, Lv, g, Rd = 1005.0, 2.5e6, 9.81, 287.05  # cp J/kg/K, Lv J/kg, g m/s², Rd J/kg/K
+cp, Lv, g, Rd = 1005.0, 2.5e6, 9.81, 287.05  # J/kg/K, J/kg, m/s², J/kg/K
 
 # 压力层列表（可扩展）；MSEstar_max 的搜索范围为 at or above LCL、below 300 hPa
 # 即满足：300 < level_hPa <= LCL_hPa
 MSE_LEVELS = [1000, 925, 850, 700, 500, 300]  # hPa
 
+# orography 单位判断阈值（m^2/s^2）：
+#   典型地面 geopotential (m^2/s^2) 量级 ≈ 0–30000（海拔 3000 m ≈ 29430 m^2/s^2）
+#   典型几何高度 (m) 量级 ≈ 0–3000
+#   阈值 9000 稳健区分两者；若区域海拔极高（>918 m 均值）或数据非标准，请手动覆盖
+_GEOPOTENTIAL_THRESHOLD = 9000.0  # m^2 s^-2
 
-def _qsat(T_K: xr.DataArray, p_hPa: float) -> xr.DataArray:
+
+def _qsat(T_K: xr.DataArray, p_hPa) -> xr.DataArray:
     """
     计算饱和比湿 qsat(T, p)，使用 Bolton (1980) 近似。
 
@@ -162,8 +175,8 @@ def _qsat(T_K: xr.DataArray, p_hPa: float) -> xr.DataArray:
 
     参数
     ----
-    T_K   : 温度 (K)
-    p_hPa : 压力 (hPa, 标量)
+    T_K   : 温度 (K)；xr.DataArray 或 ndarray
+    p_hPa : 压力 (hPa)；标量 float 或与 T_K 广播兼容的 DataArray（如 daily_mean_sp/100）
     """
     t_c = T_K - 273.15
     es_Pa = 6.112 * np.exp((17.67 * t_c) / (t_c + 243.5)) * 100.0  # 饱和水汽压 (Pa)
@@ -194,68 +207,168 @@ def _lcl_pressure(
     LCL 压力（hPa）
     """
     lcl_T = 56.0 + 1.0 / (1.0 / (Td2m_K - 56.0) + np.log(T2m_K / Td2m_K) / 800.0)
-    _lcl_p_Pa = sp_Pa * (lcl_T / T2m_K) ** (cp / Rd)  # intermediate result in Pa
-    return _lcl_p_Pa / 100.0  # → hPa，与 MSE_LEVELS 单位一致
+    _lcl_p_Pa = sp_Pa * (lcl_T / T2m_K) ** (cp / Rd)  # 中间量，单位 Pa
+    return _lcl_p_Pa / 100.0  # 转为 hPa，与 MSE_LEVELS 单位一致
 
 
-# --- 载入 2 m 地表变量（用于 MSEs 和 LCL 计算）---
-# MSEs = cp*T2m + Lv*q2m + Phi_s
-#   q2m ≈ qsat(Td2m, sp)：近地面比湿用露点近似（在露点时空气对水汽饱和）
-#   Phi_s = surface geopotential = g*z_s（若 zs 是几何高度 m），
-#           或 Phi_s = zs（若 zs 已是 geopotential m^2/s^2）
-#
-# TODO: 确认以下文件路径，ECMWF GRIB 参数编号对应关系：
-#   167 = 2m temperature (t2m), 单位 K
-#   168 = 2m dew-point temperature (d2m), 单位 K
-#   134 = surface pressure (sp), 单位 Pa
-#   129 = surface geopotential (z), 单位 m^2 s^-2（即 Phi_s = gz_s）
+def _daily_mean_sp(sp_inst: xr.DataArray) -> xr.DataArray:
+    """
+    从 instantaneous sp（瞬时气压）构造近似日均值，与 daily-mean t2m/d2m 的 step 坐标对齐。
 
+    S2S 中 sp 为瞬时量（step = 0h, 24h, 48h, ...）。
+    对于第 N 日（日窗 [(N-1)*24, N*24] h），用前后边界瞬时值平均作为日均近似：
+      sp_day[N] ≈ (sp[(N-1)*24h] + sp[N*24h]) / 2
+    若前边界不存在（如第 1 日 step=0h 缺失），则回退到仅使用日末时刻 sp。
+
+    注意：此为 daily-mean MSEs proxy 的近似气压分量，非精确日均值。
+
+    参数
+    ----
+    sp_inst : instantaneous surface pressure DataArray，step 维度为 timedelta，单位 Pa
+
+    返回
+    ----
+    DataArray，step 坐标为日末时刻 timedelta（与 daily-mean t2m 步长一致），单位 Pa
+    """
+    # 将 step timedelta 坐标转为小时整数，便于对齐逻辑
+    step_hours = np.array([
+        int(pd.Timedelta(s).total_seconds() / 3600)
+        for s in sp_inst.step.values
+    ])
+
+    # 找出所有 24h 整数倍时刻作为日窗边界（0h, 24h, 48h, ...）
+    daily_edges = sorted({int(h) for h in step_hours if h % 24 == 0})
+
+    result_list, result_step_hours = [], []
+    for i in range(len(daily_edges) - 1):
+        h_start, h_end = daily_edges[i], daily_edges[i + 1]
+        idx0 = np.where(step_hours == h_start)[0]
+        idx1 = np.where(step_hours == h_end)[0]
+        if idx0.size and idx1.size:
+            # 优先：前后边界平均（最佳日均近似）
+            sp_day = (
+                sp_inst.isel(step=int(idx0[0])) + sp_inst.isel(step=int(idx1[0]))
+            ) / 2.0
+        elif idx1.size:
+            # 回退：仅用日末时刻（若前边界不可用，见注释说明）
+            sp_day = sp_inst.isel(step=int(idx1[0]))
+        else:
+            continue
+        result_list.append(sp_day.drop_vars("step", errors="ignore"))
+        result_step_hours.append(h_end)
+
+    if not result_list:
+        raise ValueError(
+            "_daily_mean_sp: 无法从 sp 构造日均值，请检查 step 坐标是否包含 24h 整数倍时刻。"
+        )
+
+    # 沿 step 维拼合，赋值与 daily-mean t2m 一致的 timedelta 坐标
+    result = xr.concat(result_list, dim="step")
+    result = result.assign_coords(
+        step=[pd.Timedelta(hours=int(h)) for h in result_step_hours]
+    )
+    return result  # Pa，step 坐标为 timedelta（日末时刻）
+
+
+# -----------------------------------------------------------------------
+# 载入 2 m 地表变量：2t（日均温）、2d（日均露点）
+# -----------------------------------------------------------------------
+# S2S pf 数据中，2t/2d 以 daily-averaged step 下发（每步已是 24h 均值，如 step=24h 对应 0-24h 均值）。
+# TODO: 确认文件路径；ECMWF param 167 = 2m temperature (t2m), param 168 = 2m dewpoint (d2m)
+# TODO: 确认变量名（cfgrib 读取后通常为 "t2m" 和 "d2m"；可运行 list(ds.data_vars) 核验）
 t2m_sfc_ds = xr.open_dataset(
-    "/data1/huangy/fig6/NC/MSE/ecmf_sfc_167_2023-06.grib", engine="cfgrib"
+    "/data1/huangy/fig6/NC/2023-06/ecmf_rel_pf_sfc_2t_2023-06.grb", engine="cfgrib"
 )
-# TODO: 确认变量名；ECMWF GRIB 2m temperature 通常为 "t2m"
-t2m_sfc = t2m_sfc_ds["t2m"].loc[:, start_date, :, 44:35, 114:119]  # K
+t2m_sfc = t2m_sfc_ds["t2m"].loc[:, start_date, :, 44:35, 114:119]  # K, daily-mean steps
 
 td2m_sfc_ds = xr.open_dataset(
-    "/data1/huangy/fig6/NC/MSE/ecmf_sfc_168_2023-06.grib", engine="cfgrib"
+    "/data1/huangy/fig6/NC/2023-06/ecmf_rel_pf_sfc_2d_2023-06.grb", engine="cfgrib"
 )
-# TODO: 确认变量名；ECMWF GRIB 2m dewpoint 通常为 "d2m"
-td2m_sfc = td2m_sfc_ds["d2m"].loc[:, start_date, :, 44:35, 114:119]  # K
+td2m_sfc = td2m_sfc_ds["d2m"].loc[:, start_date, :, 44:35, 114:119]  # K, daily-mean steps
 
-sp_sfc_ds = xr.open_dataset(
-    "/data1/huangy/fig6/NC/MSE/ecmf_sfc_134_2023-06.grib", engine="cfgrib"
+# 每个 step 值本身已是日均窗口（resample 等效于原值，保留以维持代码风格一致性）
+daily_mean_t2m = t2m_sfc.resample(step="D").mean()   # K, shape: (number, step, lat, lon)
+daily_mean_td2m = td2m_sfc.resample(step="D").mean()  # K
+
+# -----------------------------------------------------------------------
+# 载入 sp（瞬时量）并对齐为日均代理
+# -----------------------------------------------------------------------
+# S2S pf 数据中，sp 为 instantaneous step（0h, 24h, 48h, ...），单位 Pa。
+# TODO: 确认文件路径；ECMWF param 134 = surface pressure (sp)
+# TODO: 确认变量名（cfgrib 读取后通常为 "sp"）
+sp_inst_ds = xr.open_dataset(
+    "/data1/huangy/fig6/NC/2023-06/ecmf_rel_pf_sfc_sp_2023-06.grb", engine="cfgrib"
 )
-# TODO: 确认变量名；ECMWF GRIB surface pressure 通常为 "sp"
-sp_sfc = sp_sfc_ds["sp"].loc[:, start_date, :, 44:35, 114:119]  # Pa
+sp_inst = sp_inst_ds["sp"].loc[:, start_date, :, 44:35, 114:119]  # Pa, instantaneous
+# 用相邻瞬时值均值构造日均 sp proxy，step 坐标对齐到 daily_mean_t2m
+daily_mean_sp = _daily_mean_sp(sp_inst)  # Pa, daily-mean proxy
 
-# 地面位势（surface geopotential, param 129）
-# ECMWF param 129 "z" 的单位为 m^2 s^-2（即已含 g，Phi_s = g*z_s）
-# 因此 MSEs 中直接加 zs_phi，无需再乘 g
-# 若实际数据单位为几何高度(m)，请将下方 mse_s 改为 cp*t2m_sfc + Lv*q2m + g*zs_phi
-# TODO: 确认文件路径和变量名（param 129, 通常变量名 "z" 或 "zs"）
-# TODO: 确认是否为随时间变化的场或静态场（orography 通常为静态）
-zs_phi_ds = xr.open_dataset(
-    "/data1/huangy/fig6/NC/MSE/ecmf_sfc_129_2023-06.grib", engine="cfgrib"
+# -----------------------------------------------------------------------
+# 载入静态 orography（控制成员 cf，非逐成员预报）
+# -----------------------------------------------------------------------
+# 由于无逐成员 surface geopotential 预报，使用控制成员的静态 orography。
+# xarray 广播规则：gz_s 为 (latitude, longitude) 二维场，计算 MSEs 时
+# 会自动广播到 (number, step, latitude, longitude)，不会引入 silent bug。
+#
+# 单位判断（二选一，取决于实际数据文件）：
+#   ECMWF param 129 "z"   → surface geopotential，单位 m^2 s^-2，直接使用（Phi_s = z）
+#   ECMWF param 228 "orog"→ geometric height (orography)，单位 m，须乘 g（Phi_s = g*z）
+# TODO: 确认文件路径和变量名（常见：param 129 "z" 或 param 228 "orog"）
+# TODO: 若文件含时间维，请先 .squeeze() 或 .isel(time=0) 去掉时间维
+orog_ds = xr.open_dataset(
+    "/data1/huangy/fig6/NC/MSE/ecmf_cf_orog_2023-06.grib", engine="cfgrib"
 )
-# NOTE: ECMWF param 129 "z" is geopotential (Phi = g*z_geometric), units m^2/s^2.
-#       We add it directly to MSE without multiplying by g again.
-zs_phi = zs_phi_ds["z"].loc[:, start_date, :, 44:35, 114:119]  # m^2 s^-2
+# TODO: 将 "z" 替换为实际变量名
+_orog_raw = orog_ds["z"].sel(latitude=slice(44, 35), longitude=slice(114, 119))
+# 若含多余维（time 等），压缩为 (latitude, longitude)
+if _orog_raw.ndim > 2:
+    _extra_dims = [d for d in _orog_raw.dims if d not in ("latitude", "longitude")]
+    _orog_raw = _orog_raw.isel({d: 0 for d in _extra_dims}).squeeze()
 
-# --- MSEs（近地面静态能量）---
-# 对应论文：MSEs = cp*T2m + Lv*q2m + Phi_s  （Li & Tamarin-Brodsky 2026）
-# 注：q2m ≈ qsat(Td2m, sp)，利用 2 m 露点温度代替实际比湿
-q2m_approx = _qsat(td2m_sfc, sp_sfc / 100.0)  # sp 由 Pa 转为 hPa
-mse_s = cp * t2m_sfc + Lv * q2m_approx + zs_phi  # J/kg
-daily_mean_mse_s = mse_s.resample(step="D").mean()
+# 稳健单位检查：
+#   典型地面 geopotential (m^2/s^2) 量级 ≈ 0–30000（海拔 3000 m 对应约 29430）
+#   典型几何高度 (m) 量级 ≈ 0–3000
+#   阈值 9000 介于两者之间，可可靠区分（如误判请手动注释覆盖）
+_orog_sample = float(_orog_raw.mean().values)
+if _orog_sample > _GEOPOTENTIAL_THRESHOLD:
+    # 判断为 geopotential (m^2 s^-2)，直接作为势能项 Phi_s
+    print(
+        f"  INFO: orography 判断为 geopotential (m^2/s^2)，"
+        f"区域均值 = {_orog_sample:.0f}，直接使用"
+    )
+    gz_s = _orog_raw  # Phi_s = z (m^2 s^-2)
+else:
+    # 判断为几何高度 (m)，乘以 g 转为势能 Phi_s = g*z
+    print(
+        f"  INFO: orography 判断为几何高度 (m)，"
+        f"区域均值 = {_orog_sample:.0f} m，使用 g*z"
+    )
+    gz_s = g * _orog_raw  # Phi_s = g * z (m^2 s^-2)
 
-# --- 各压力层 MSE*（仅用 T 和 gh，不使用实际 q）---
-# NOTE: ECMWF GRIB 变量 "gh"（param 156）为位势高度（geopotential height, gpm ≈ m）。
-#       MSE* = cp*T + Lv*qsat(T,p) + g*gh，其中 g*gh 将几何高度转换为位势能 (m^2/s^2)。
-#       若文件中的 "gh" 实为 geopotential (m^2/s^2)，请将 g * z_lev 改为 z_lev。
-# TODO: 用实际数据加载后打印 gh 量级（~几千 m 则为几何高度；~几万则为 geopotential）
-# TODO: 确认 300 hPa 层数据文件是否存在（路径：ecmf_pl300_130_*.grib, ecmf_pl300_156_*.grib）
-# NOTE: 文件名中的 "2022-08" 与地表文件 "2023-06" 不同，这与原代码保持一致；
-#       该命名约定可能源于再预报（reforecast）档案，请确认实际数据来源。
+# -----------------------------------------------------------------------
+# MSEs_2m（daily-mean near-surface MSE proxy）
+# -----------------------------------------------------------------------
+# 对应 Li & Tamarin-Brodsky (2026): MSEs = cp*T2m + Lv*q2m + Phi_s
+#   - T2m  : daily-mean 2m temperature (K)
+#   - q2m  : 近地面比湿，以露点温度代替实际比湿（qsat(Td2m, sp) ≈ q2m）
+#   - Phi_s: gz_s，静态 orography 势能项（见上方单位判断）
+# 重要说明：因使用 daily-mean 变量和静态 orography，本量为 daily-mean 2m MSE proxy，
+#           而非严格意义上的瞬时近地面 MSEs。
+q2m_proxy = _qsat(daily_mean_td2m, daily_mean_sp / 100.0)  # daily_mean_sp Pa → hPa
+# gz_s 为 (lat, lon) 静态场，xarray 自动广播到 (number, step, lat, lon)
+mse_s_daily = cp * daily_mean_t2m + Lv * q2m_proxy + gz_s  # J/kg, daily-mean MSE proxy
+
+# -----------------------------------------------------------------------
+# 各压力层 MSE*（仅用 T 和 gh，不使用实际 q）
+# -----------------------------------------------------------------------
+# 对应论文：MSE*_lev = cp*T_lev + Lv*qsat(T_lev, p_lev) + g*gh_lev
+# NOTE: ECMWF GRIB 变量 "gh"（param 156）为位势高度（geopotential height），单位 m（gpm）。
+#       MSE* = cp*T + Lv*qsat(T,p) + g*gh，其中 g*gh 将几何高度转换为势能 (m^2/s^2)。
+#       若实际文件中 "gh" 为 geopotential (m^2/s^2)，请将下方 g * _z_lev 改为 _z_lev。
+# TODO: 加载后确认量级：~百至千 m → 几何高度（gpm）；~万级 → geopotential (m^2/s^2)
+# TODO: 确认 300 hPa 层数据文件存在（ecmf_pl300_130_*.grib 和 ecmf_pl300_156_*.grib）
+# NOTE: 文件名中 "2022-08" 与当前预报 "2023-06" 不同；
+#       该命名可能对应再预报（reforecast）气候态档案，请确认数据来源。
 mse_star_by_level: dict = {}
 for _lev in MSE_LEVELS:
     _t_lev = xr.open_dataset(
@@ -263,41 +376,61 @@ for _lev in MSE_LEVELS:
     )["t"].loc[:, start_date, :, 44:35, 114:119]  # K
     _z_lev = xr.open_dataset(
         f"/data1/huangy/fig6/NC/MSE/ecmf_pl{_lev}_156_2022-08.grib", engine="cfgrib"
-    )["gh"].loc[:, start_date, :, 44:35, 114:119]  # m (geopotential height, param 156)
+    )["gh"].loc[:, start_date, :, 44:35, 114:119]  # m（geopotential height, param 156）
     _qs_lev = _qsat(_t_lev, float(_lev))
-    # MSE* = cp*T + Lv*qsat(T,p) + g*z  （z 为几何高度 m，g*z 转为能量项）
+    # MSE*_lev = cp*T + Lv*qsat(T,p) + g*gh  （gh 为几何高度 m，g*gh 为势能 m^2/s^2）
     mse_star_by_level[_lev] = cp * _t_lev + Lv * _qs_lev + g * _z_lev  # J/kg
 
-# --- MSEstar500 ---
-# 对应论文 CAPE scaling：CAPE ∝ MSEs - MSE*500  （Li & Tamarin-Brodsky 2026）
+# -----------------------------------------------------------------------
+# MSEstar500（CAPE scaling 参考层）
+# -----------------------------------------------------------------------
+# 对应论文 CAPE scaling：CAPE ∝ MSEs - MSE*_500（Li & Tamarin-Brodsky 2026）
 mse_star_500 = mse_star_by_level[500]
-daily_max_mse_star500 = mse_star_500.resample(step="D").max()
+daily_max_mse_star500 = mse_star_500.resample(step="D").max()  # J/kg, daily max
 
-# --- LCL 压力（Bolton 1980）---
-lcl_p_da = _lcl_pressure(t2m_sfc, td2m_sfc, sp_sfc)  # hPa
+# -----------------------------------------------------------------------
+# LCL 压力（Bolton 1980）
+# -----------------------------------------------------------------------
+# 使用 daily-mean T2m、daily-mean Td2m、daily-mean sp proxy 计算 LCL。
+# LCL 用于界定 MSEstar_max 的下边界（at or above LCL）。
+lcl_p_daily = _lcl_pressure(daily_mean_t2m, daily_mean_td2m, daily_mean_sp)  # hPa
 
-# --- MSEstar_max ---
-# 对应论文 "maximum MSE* in the lower free troposphere"（Li & Tamarin-Brodsky 2026）
+# -----------------------------------------------------------------------
+# MSEstar_max（下对流层最大 MSE*）
+# -----------------------------------------------------------------------
+# 对应论文"maximum MSE* in the lower free troposphere"（Li & Tamarin-Brodsky 2026）
 # 搜索范围：at or above LCL（level_hPa <= LCL_hPa）且 below 300 hPa（level_hPa > 300）
 # 即：300 < level_hPa <= LCL_hPa
 _mse_star_list_new = [
     mse_star_by_level[_lev].assign_coords(level=_lev) for _lev in MSE_LEVELS
 ]
-mse_star_all = xr.concat(_mse_star_list_new, dim="level")  # dim=(level, number, step, lat, lon)
+# 沿 level 维拼合：shape = (level, number, step, latitude, longitude)
+mse_star_all = xr.concat(_mse_star_list_new, dim="level")
 
-# level_coord 广播到 (level, number, step, lat, lon)，lcl_p_da 广播到 (level, ...)
+# 掩码：level_coord 沿 level 维广播，lcl_p_daily 沿剩余维广播（xarray 自动对齐）
 _level_coord = mse_star_all["level"]  # DataArray, dim=(level,)
-# 有效层掩码：高于 LCL（低压）且低于 300 hPa（高压侧边界）
-_valid_mask = (_level_coord > 300) & (_level_coord <= lcl_p_da)
+_valid_mask = (_level_coord > 300) & (_level_coord <= lcl_p_daily)
+# 取满足条件层的最大 MSE*；不满足条件的层设为 NaN。
+# 边界情况说明：若某格点 LCL 低于 300 hPa（极干/高海拔情况，NCHN 夏季极少见），
+# 则该格点的 valid_mask 全为 False，mse_star_max_da 对应位置为 NaN。
+# 下游 extract_period_mean 会对 NaN 进行均值忽略，不会引发 silent 数值错误。
 mse_star_max_da = mse_star_all.where(_valid_mask).max(dim="level")  # J/kg
-daily_max_mse_star_max = mse_star_max_da.resample(step="D").max()
+daily_max_mse_star_max = mse_star_max_da.resample(step="D").max()   # J/kg, daily max
 
-# --- Barrier = MSEstar_max - MSEs ---
-# 对应论文"residual energy barrier"（Li & Tamarin-Brodsky 2026）
-# Barrier > 0：上层 MSE* 高于近地面 MSE，存在阻碍深对流的能量障碍
-# 注：Barrier = MSEstar_max - MSEs（不要写反）
-barrier_da = mse_star_max_da - mse_s  # J/kg
-daily_max_barrier = barrier_da.resample(step="D").max()
+# -----------------------------------------------------------------------
+# LCL 的 step 维可能与 pressure-level 数据的 step 维不完全相同，
+# 因此用 daily_max_mse_star_max 和 daily-resample 后的 mse_s_daily 计算 Barrier，
+# 确保两者 step 坐标对齐（若有偏差，xarray 会报 MergeError，便于调试）。
+# -----------------------------------------------------------------------
+
+# -----------------------------------------------------------------------
+# Barrier_NCHN = MSEstar_max - MSEs（残余能量障碍）
+# -----------------------------------------------------------------------
+# 对应论文"residual energy barrier"（Li & Tamarin-Brodsky 2026）。
+# Barrier > 0：上层 MSE* 高于近地面 MSE，存在阻碍深对流的能量障碍。
+# 注意：Barrier = MSEstar_max - MSEs（不要写反）。
+# 两侧均已重采样到 daily，step 坐标需一致；若不一致请先 .reindex_like() 对齐。
+daily_max_barrier = daily_max_mse_star_max - mse_s_daily.resample(step="D").mean()  # J/kg
 
 # =============================================================================
 # 2. 加载 S2S 前兆因子（起报后初始3天平均）
