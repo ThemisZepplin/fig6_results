@@ -353,13 +353,13 @@ daily_mean_sp = _daily_mean_sp(sp_inst)  # Pa, daily-mean proxy
 # 单位判断（二选一，取决于实际数据文件）：
 #   ECMWF param 129 "z"   → surface geopotential，单位 m^2 s^-2，直接使用（Phi_s = z）
 #   ECMWF param 228 "orog"→ geometric height (orography)，单位 m，须乘 g（Phi_s = g*z）
-# TODO: 确认文件路径和变量名（常见：param 129 "z" 或 param 228 "orog"）
-# TODO: 若文件含时间维，请先 .squeeze() 或 .isel(time=0) 去掉时间维
+# 文件含变量 "orog"（ECMWF param 228，几何高度，单位 m）；
+# 若文件含时间/step等多余维，下方 ndim>2 分支会自动去除首个非空间维。
 orog_ds = xr.open_dataset(
     "/data1/huangy/fig6/NC/MSE/ecmf_cf_orog_2023-06.grib", engine="cfgrib"
 )
-# TODO: 将 "z" 替换为实际变量名
-_orog_raw = orog_ds["z"].sel(latitude=slice(44, 35), longitude=slice(114, 119))
+# 实际变量名为 "orog"（cfgrib 读取 param 228 时映射为该名称）
+_orog_raw = orog_ds["orog"].sel(latitude=slice(44, 35), longitude=slice(114, 119))
 # 若含多余维（time 等），压缩为 (latitude, longitude)
 if _orog_raw.ndim > 2:
     _extra_dims = [d for d in _orog_raw.dims if d not in ("latitude", "longitude")]
