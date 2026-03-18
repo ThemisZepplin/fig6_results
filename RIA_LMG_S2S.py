@@ -99,25 +99,58 @@ swanlab.init(
 # =============================================================================
 print("正在加载基础变量数据 (S2S)...")
 
+# -----------------------------------------------------------------------
+# 数据步长类型说明（适用于 1a–1f 所有变量）：
+#
+# 【瞬时/累计数据】（step = 0h, 24h, 48h, ... 整点瞬时值）：
+#   T2m (mx2t6), TP (tp), Z500/Z850 (gh), SSR (ssr), SSHF (sshf)
+#   经 resample(step="D") 后，step 坐标变为 0d, 1d, 2d, ...
+#     valid_time[i] = start_time + i_days
+#     研究时段 study_start(2023-06-14) = start_time + 2d → step=2d
+#             study_end  (2023-06-24) = start_time + 12d → step=12d
+#
+# 【日均数据】（step = 24h, 48h, ... 表示 0-24h、24-48h 窗口均值）：
+#   SM20 (sm20), 以及 MSE 用 2t/2d
+#   经 resample(step="D") 后，step 坐标从 1d 开始（因首个日均值在 step=24h）：
+#     valid_time[i] = start_time + (i+1)_days（i 从 0 开始）
+#     研究时段首步：step=2d（对应窗口 24-48h，覆盖 2023-06-13~14）
+#
+# 提取函数（extract_period_mean 等）统一使用：
+#   dates[i] = start_time + pd.Timedelta(step_vals[i])
+# 自动适配两种步长类型，无需手动区分。
+# -----------------------------------------------------------------------
+
 # 1a. T2m（日最高气温）
+# 数据类型：瞬时（mx2t6，6 小时滚动最大值），step = 6h, 12h, 18h, 24h, ...
+# resample(step="D").max() → step 坐标 = 0d, 1d, 2d, ...（每日最高气温）
+# 研究时段对应 step 2d（2023-06-14）~ 12d（2023-06-24）
 tmxfile = "/data1/huangy/fig6/NC/2023-06/ecmf_rel_pf_sfc_mx2t6_2023-06.grb"
 tmx_ds = xr.open_dataset(tmxfile, engine="cfgrib")
 tmx = tmx_ds["mx2t6"].loc[:, start_date, :, 44:35, 114:119] - 273.16
 daily_max_tmx = tmx.resample(step="D").max()
 
 # 1b. SM20（土壤湿度）
+# 数据类型：日均（step = 24h, 48h, ...，每步为 24h 窗口均值）
+# resample(step="D").max() → step 坐标从 1d 开始（首个日均步在 24h bin 内）
+# 研究时段对应 step 2d（2023-06-14）~ 12d（2023-06-24）
 smfile = "/data1/huangy/fig6/NC/2023-06/ecmf_rel_pf_sfc_sm2023-06.grb"
 sm_ds = xr.open_dataset(smfile, engine="cfgrib")
 sm = sm_ds["sm20"].loc[:, start_date, :, 44:35, 114:119]
 daily_max_sm = sm.resample(step="D").max()
 
 # 1c. TP（降水）
+# 数据类型：累计量（step = 0h, 24h, 48h ... 自起报时刻的累计降水，Pa）
+# resample(step="D").max() 取每日最大累计值，.diff() 差分得日降水量
+# diff 后 step[0] 对应 NaN；研究时段起始 step 2d 对应 2023-06-14
 tpfile = "/data1/huangy/fig6/NC/2023-06/ecmf_rel_pf_sfc_tp2023-06.grb"
 tp_ds = xr.open_dataset(tpfile, engine="cfgrib")
 NCHN_tp_data = tp_ds["tp"].loc[:, start_date, :, 44:35, 114:119]
 daily_max_NCHNtp = NCHN_tp_data.resample(step="D").max().diff(dim="step")
 
 # 1d. Z500 & WNPSH
+# 数据类型：瞬时（gh，位势高度，step = 0h, 24h, 48h, ...）
+# resample(step="D").max() → step 坐标 = 0d, 1d, 2d, ...
+# 研究时段对应 step 2d（2023-06-14）~ 12d（2023-06-24）
 zfile = "/data1/huangy/fig6/NC/2023-06/ecmf_rel_pf_pl_zqt2023-06.grb"
 z_ds = xr.open_dataset(zfile, engine="cfgrib")
 reforecastfile = f"/data1/huangy/fig6/NC/pl_z03_22/merged_{start_date}.nc"
@@ -132,12 +165,19 @@ z_WNPSH = z_ds["gh"].loc[:, start_date, :, 850, 25:15, 115:150]
 daily_max_z_WNPSH = z_WNPSH.resample(step="D").max()
 
 # 1e. SSR（地面短波辐射）
+# 数据类型：瞬时/累计（ssr，step = 0h, 24h, 48h, ...）
+# resample(step="D").mean() → 每日所有瞬时值的均值；step 坐标 = 0d, 1d, 2d, ...
+# 若 ssr 仅有每日一个瞬时值，均值等价于该值
+# 研究时段对应 step 2d（2023-06-14）~ 12d（2023-06-24）
 ssr_file = "/data1/huangy/fig6/NC/2023-06/ecmf_rel_pf_sfc_radiation2023-06.grb"
 ssr_ds = xr.open_dataset(ssr_file, engine="cfgrib")
 ssr = ssr_ds["ssr"].loc[:, start_date, :, 44:35, 114:119]
 daily_mean_ssr = ssr.resample(step="D").mean()
 
 # 1f. SSHF（感热通量）
+# 数据类型：瞬时/累计（sshf，step = 0h, 24h, 48h, ...）
+# resample(step="D").mean() → 每日均值；step 坐标 = 0d, 1d, 2d, ...
+# 研究时段对应 step 2d（2023-06-14）~ 12d（2023-06-24）
 sshf_file = "/data1/huangy/fig6/NC/2023-06/ecmf_rel_pf_sfc_hflux2023-06.grb"
 sshf_ds = xr.open_dataset(sshf_file, engine="cfgrib")
 sshf = sshf_ds["sshf"].loc[:, start_date, :, 44:35, 114:119]
@@ -505,10 +545,22 @@ era5_obs_ts = _era5_study.mean(dim=_spatial_dims).values  # shape: (n_days,)
 # 公共处理函数
 # =============================================================================
 def extract_period_mean(daily_data, is_reforecast=False):
-    """提取研究时段（study_start ~ study_end）的集合成员均值，返回长度50的一维数组。"""
+    """提取研究时段（study_start ~ study_end）的集合成员均值，返回长度50的一维数组。
+
+    日期映射规则（适配瞬时与日均两类数据）：
+    ---------------------------------------------------------------
+    经 resample(step="D") 后，step 坐标为 timedelta（如 0d, 1d, 2d, ...）。
+    对应有效时刻：valid_time = start_time + step_timedelta
+      - 瞬时数据（原始 step=0h,24h,...）→ resample 后 step 从 0d 开始
+          step=2d → 2023-06-14 = study_start  step=12d → 2023-06-24 = study_end
+      - 日均数据（原始 step=24h,48h,...）→ resample 后 step 从 1d 开始
+          step=2d → 2023-06-14 = study_start  step=12d → 2023-06-24 = study_end
+    两类数据的研究时段筛选均为：study_start <= start_time+step <= study_end
+    """
     step_vals = daily_data.step
-    dates = [start_time + pd.Timedelta(days=s) for s in range(1, len(step_vals) + 1)]
-    dates_ts = pd.to_datetime(dates, format="%Y-%m-%d")
+    # 使用 step 的 timedelta 值直接推算有效日期，避免 range(1,N+1) 的索引偏差
+    dates = [start_time + pd.Timedelta(sv) for sv in step_vals.values]
+    dates_ts = pd.to_datetime(dates)
     selected = daily_data.sel(
         step=[s for s, d in zip(step_vals.values, dates_ts) if study_start <= d <= study_end]
     )
@@ -519,10 +571,16 @@ def extract_period_mean(daily_data, is_reforecast=False):
 
 
 def extract_daily_timeseries(daily_data, is_reforecast=False):
-    """提取集合均值的逐日时间序列，返回形状 (n_days,) 的数组。"""
+    """提取集合均值的逐日时间序列，返回形状 (n_days,) 的数组。
+
+    日期映射规则同 extract_period_mean：valid_time = start_time + step_timedelta
+    研究时段 2023-06-14 ~ 2023-06-24 对应 step 2d ~ 12d（瞬时数据）
+    或 step 2d ~ 12d（日均数据，step 从 1d 开始时同样覆盖该时段）。
+    """
     step_vals = daily_data.step
-    dates = [start_time + pd.Timedelta(days=s) for s in range(1, len(step_vals) + 1)]
-    dates_ts = pd.to_datetime(dates, format="%Y-%m-%d")
+    # 使用 step 的 timedelta 值直接推算有效日期
+    dates = [start_time + pd.Timedelta(sv) for sv in step_vals.values]
+    dates_ts = pd.to_datetime(dates)
     selected = daily_data.sel(
         step=[s for s, d in zip(step_vals.values, dates_ts) if study_start <= d <= study_end]
     )
@@ -531,10 +589,15 @@ def extract_daily_timeseries(daily_data, is_reforecast=False):
 
 
 def extract_daily_timeseries_per_member(daily_data):
-    """提取每个集合成员的逐日时间序列，返回形状 (n_members, n_days) 的数组。"""
+    """提取每个集合成员的逐日时间序列，返回形状 (n_members, n_days) 的数组。
+
+    日期映射规则同 extract_period_mean：valid_time = start_time + step_timedelta
+    保留 number 维（每成员），step 维按研究时段筛选后保留。
+    """
     step_vals = daily_data.step
-    dates = [start_time + pd.Timedelta(days=s) for s in range(1, len(step_vals) + 1)]
-    dates_ts = pd.to_datetime(dates, format="%Y-%m-%d")
+    # 使用 step 的 timedelta 值直接推算有效日期
+    dates = [start_time + pd.Timedelta(sv) for sv in step_vals.values]
+    dates_ts = pd.to_datetime(dates)
     selected = daily_data.sel(
         step=[s for s, d in zip(step_vals.values, dates_ts) if study_start <= d <= study_end]
     )
