@@ -2,12 +2,19 @@
 标准 LMG / Shapley Relative Importance 分析脚本 (S2S 版)
 
 用途：
-  对10个前兆因子 [NCHN_tp, sm_avg, WNPSH, SSR_Avg, SHF_Avg,
-  z500_anom_NCHN, Stability_NCHN, NCVI, ISM, SST_Grad]
+  对12个前兆因子 [NCHN_tp, sm_avg, WNPSH, SSR_Avg, SHF_Avg,
+  z500_anom_NCHN, MSEstar_max_NCHN, MSEstar500_NCHN, Barrier_NCHN,
+  NCVI, ISM, SST_Grad]
   使用标准 LMG 方法计算相对重要性：
     - 枚举(或蒙特卡洛采样)所有可能的变量进入顺序
     - 计算每个变量在该顺序下带来的增量 R²
     - 对所有顺序取平均，得到该变量的 LMG 相对重要性
+
+热力因子定义参考 Li & Tamarin-Brodsky (Sci Adv, 2026) MSE 框架：
+  - MSEs        = cp*T2m + Lv*q2m + Phi_s  (近地面 MSE，使用 2 m 变量)
+  - MSEstar500  = cp*T500 + Lv*qsat(T500,500hPa) + g*z500
+  - MSEstar_max = at or above LCL、below 300 hPa 的下对流层最大 MSE*
+  - Barrier     = MSEstar_max - MSEs  (残余能量障碍)
 """
 
 import warnings
@@ -45,7 +52,9 @@ FACTOR_COLS = [
     "SSR_Avg",
     "SHF_Avg",
     "z500_anom_NCHN",
-    "Stability_NCHN",
+    "MSEstar_max_NCHN",   # Li & Tamarin-Brodsky (2026): MSE*_max in lower free troposphere
+    "MSEstar500_NCHN",    # Li & Tamarin-Brodsky (2026): MSE*_500 (CAPE scaling reference)
+    "Barrier_NCHN",       # Li & Tamarin-Brodsky (2026): residual energy barrier = MSE*_max - MSEs
     "NCVI",
     "ISM",
     "SST_Grad",
@@ -57,9 +66,11 @@ LABEL_MAP = {
     "sm_avg": "SM\n(Avg)",
     "WNPSH": "WNPSH\n(Avg)",
     "SSR_Avg": "SSR\n(Avg)",
-    "Stability_NCHN": "Stability\nNCHN",
     "SHF_Avg": "Sensible\nHeat",
     "z500_anom_NCHN": "NCHN\nZ500",
+    "MSEstar_max_NCHN": "MSE*max\nNCHN",
+    "MSEstar500_NCHN": "MSE*500\nNCHN",
+    "Barrier_NCHN": "Barrier\nNCHN",
     "NCVI": "NCVI\n(S2S)",
     "ISM": "ISM\n(S2S)",
     "SST_Grad": "SST Grad\n(S2S)",
@@ -78,7 +89,7 @@ swanlab.init(
         "study_period": f"{study_start.date()} to {study_end.date()}",
         "model_type": "OLS + LMG Relative Importance",
         "factors": FACTOR_COLS,
-        "description": "标准 LMG/Shapley 相对重要性分析 (S2S 版)",
+        "description": "标准 LMG/Shapley 相对重要性分析 (S2S 版, MSE 热力因子框架)",
         "mc_samples": MC_SAMPLES,
     },
 )
@@ -132,36 +143,161 @@ sshf_ds = xr.open_dataset(sshf_file, engine="cfgrib")
 sshf = sshf_ds["sshf"].loc[:, start_date, :, 44:35, 114:119]
 daily_mean_sshf = sshf.resample(step="D").mean()
 
-# 1g. 低层大气稳定度（MSE 方法）
-cp, Lv, g = 1005.0, 2.5e6, 9.81
-t1000 = xr.open_dataset(
-    "/data1/huangy/fig6/NC/MSE/ecmf_pl1000_130_2022-08.grib", engine="cfgrib"
-)["t"].loc[:, start_date, :, 44:35, 114:119]
-q1000 = xr.open_dataset(
-    "/data1/huangy/fig6/NC/MSE/ecmf_pl1000_133_2022-08.grib", engine="cfgrib"
-)["q"].loc[:, start_date, :, 44:35, 114:119]
-z1000 = xr.open_dataset(
-    "/data1/huangy/fig6/NC/MSE/ecmf_pl1000_156_2022-08.grib", engine="cfgrib"
-)["gh"].loc[:, start_date, :, 44:35, 114:119]
-mse_1000 = cp * t1000 + Lv * q1000 + g * z1000
+# 1g. MSE 热力因子框架（Li & Tamarin-Brodsky, Sci Adv 2026）
+# -----------------------------------------------------------------------
+# 物理常数
+cp, Lv, g, Rd = 1005.0, 2.5e6, 9.81, 287.05  # cp J/kg/K, Lv J/kg, g m/s², Rd J/kg/K
 
-mse_star_list = []
-for lev in [925, 850, 700, 500]:
-    t_lev = xr.open_dataset(
-        f"/data1/huangy/fig6/NC/MSE/ecmf_pl{lev}_130_2022-08.grib", engine="cfgrib"
-    )["t"].loc[:, start_date, :, 44:35, 114:119]
-    z_lev = xr.open_dataset(
-        f"/data1/huangy/fig6/NC/MSE/ecmf_pl{lev}_156_2022-08.grib", engine="cfgrib"
-    )["gh"].loc[:, start_date, :, 44:35, 114:119]
-    t_c = t_lev - 273.15
-    es_pa = 6.112 * np.exp((17.67 * t_c) / (t_c + 243.5)) * 100.0
-    p_pa = lev * 100.0
-    q_star_lev = (0.622 * es_pa) / (p_pa - 0.378 * es_pa)
-    mse_star_list.append(cp * t_lev + Lv * q_star_lev + g * z_lev)
+# 压力层列表（可扩展）；MSEstar_max 的搜索范围为 at or above LCL、below 300 hPa
+# 即满足：300 < level_hPa <= LCL_hPa
+MSE_LEVELS = [1000, 925, 850, 700, 500, 300]  # hPa
 
-mse_star_max = xr.concat(mse_star_list, dim="level").max(dim="level")
-stability_index = mse_1000 - mse_star_max
-daily_max_stability = stability_index.resample(step="D").max()
+
+def _qsat(T_K: xr.DataArray, p_hPa: float) -> xr.DataArray:
+    """
+    计算饱和比湿 qsat(T, p)，使用 Bolton (1980) 近似。
+
+    对应论文 MSE* = cp*T + Lv*qsat(T, p) + g*z（Li & Tamarin-Brodsky 2026）。
+    注意：此函数只用温度和压力，不使用实际比湿 q，避免混淆。
+
+    参数
+    ----
+    T_K   : 温度 (K)
+    p_hPa : 压力 (hPa, 标量)
+    """
+    t_c = T_K - 273.15
+    es_Pa = 6.112 * np.exp((17.67 * t_c) / (t_c + 243.5)) * 100.0  # 饱和水汽压 (Pa)
+    p_Pa = p_hPa * 100.0
+    return (0.622 * es_Pa) / (p_Pa - 0.378 * es_Pa)
+
+
+def _lcl_pressure(
+    T2m_K: xr.DataArray,
+    Td2m_K: xr.DataArray,
+    sp_Pa: xr.DataArray,
+) -> xr.DataArray:
+    """
+    Bolton (1980) 近似计算 LCL 压力（hPa）。
+
+    公式（Bolton 1980, eq. 22 & 21，温度单位 K）：
+      LCL_T = 56 + 1 / (1/(Td - 56) + ln(T/Td)/800)
+      LCL_P = sp * (LCL_T / T)^(cp/Rd)
+
+    参数
+    ----
+    T2m_K  : 2 m 温度 (K)
+    Td2m_K : 2 m 露点温度 (K)
+    sp_Pa  : 地面气压 (Pa)
+
+    返回
+    ----
+    LCL 压力（hPa）
+    """
+    lcl_T = 56.0 + 1.0 / (1.0 / (Td2m_K - 56.0) + np.log(T2m_K / Td2m_K) / 800.0)
+    _lcl_p_Pa = sp_Pa * (lcl_T / T2m_K) ** (cp / Rd)  # intermediate result in Pa
+    return _lcl_p_Pa / 100.0  # → hPa，与 MSE_LEVELS 单位一致
+
+
+# --- 载入 2 m 地表变量（用于 MSEs 和 LCL 计算）---
+# MSEs = cp*T2m + Lv*q2m + Phi_s
+#   q2m ≈ qsat(Td2m, sp)：近地面比湿用露点近似（在露点时空气对水汽饱和）
+#   Phi_s = surface geopotential = g*z_s（若 zs 是几何高度 m），
+#           或 Phi_s = zs（若 zs 已是 geopotential m^2/s^2）
+#
+# TODO: 确认以下文件路径，ECMWF GRIB 参数编号对应关系：
+#   167 = 2m temperature (t2m), 单位 K
+#   168 = 2m dew-point temperature (d2m), 单位 K
+#   134 = surface pressure (sp), 单位 Pa
+#   129 = surface geopotential (z), 单位 m^2 s^-2（即 Phi_s = gz_s）
+
+t2m_sfc_ds = xr.open_dataset(
+    "/data1/huangy/fig6/NC/MSE/ecmf_sfc_167_2023-06.grib", engine="cfgrib"
+)
+# TODO: 确认变量名；ECMWF GRIB 2m temperature 通常为 "t2m"
+t2m_sfc = t2m_sfc_ds["t2m"].loc[:, start_date, :, 44:35, 114:119]  # K
+
+td2m_sfc_ds = xr.open_dataset(
+    "/data1/huangy/fig6/NC/MSE/ecmf_sfc_168_2023-06.grib", engine="cfgrib"
+)
+# TODO: 确认变量名；ECMWF GRIB 2m dewpoint 通常为 "d2m"
+td2m_sfc = td2m_sfc_ds["d2m"].loc[:, start_date, :, 44:35, 114:119]  # K
+
+sp_sfc_ds = xr.open_dataset(
+    "/data1/huangy/fig6/NC/MSE/ecmf_sfc_134_2023-06.grib", engine="cfgrib"
+)
+# TODO: 确认变量名；ECMWF GRIB surface pressure 通常为 "sp"
+sp_sfc = sp_sfc_ds["sp"].loc[:, start_date, :, 44:35, 114:119]  # Pa
+
+# 地面位势（surface geopotential, param 129）
+# ECMWF param 129 "z" 的单位为 m^2 s^-2（即已含 g，Phi_s = g*z_s）
+# 因此 MSEs 中直接加 zs_phi，无需再乘 g
+# 若实际数据单位为几何高度(m)，请将下方 mse_s 改为 cp*t2m_sfc + Lv*q2m + g*zs_phi
+# TODO: 确认文件路径和变量名（param 129, 通常变量名 "z" 或 "zs"）
+# TODO: 确认是否为随时间变化的场或静态场（orography 通常为静态）
+zs_phi_ds = xr.open_dataset(
+    "/data1/huangy/fig6/NC/MSE/ecmf_sfc_129_2023-06.grib", engine="cfgrib"
+)
+# NOTE: ECMWF param 129 "z" is geopotential (Phi = g*z_geometric), units m^2/s^2.
+#       We add it directly to MSE without multiplying by g again.
+zs_phi = zs_phi_ds["z"].loc[:, start_date, :, 44:35, 114:119]  # m^2 s^-2
+
+# --- MSEs（近地面静态能量）---
+# 对应论文：MSEs = cp*T2m + Lv*q2m + Phi_s  （Li & Tamarin-Brodsky 2026）
+# 注：q2m ≈ qsat(Td2m, sp)，利用 2 m 露点温度代替实际比湿
+q2m_approx = _qsat(td2m_sfc, sp_sfc / 100.0)  # sp 由 Pa 转为 hPa
+mse_s = cp * t2m_sfc + Lv * q2m_approx + zs_phi  # J/kg
+daily_mean_mse_s = mse_s.resample(step="D").mean()
+
+# --- 各压力层 MSE*（仅用 T 和 gh，不使用实际 q）---
+# NOTE: ECMWF GRIB 变量 "gh"（param 156）为位势高度（geopotential height, gpm ≈ m）。
+#       MSE* = cp*T + Lv*qsat(T,p) + g*gh，其中 g*gh 将几何高度转换为位势能 (m^2/s^2)。
+#       若文件中的 "gh" 实为 geopotential (m^2/s^2)，请将 g * z_lev 改为 z_lev。
+# TODO: 用实际数据加载后打印 gh 量级（~几千 m 则为几何高度；~几万则为 geopotential）
+# TODO: 确认 300 hPa 层数据文件是否存在（路径：ecmf_pl300_130_*.grib, ecmf_pl300_156_*.grib）
+# NOTE: 文件名中的 "2022-08" 与地表文件 "2023-06" 不同，这与原代码保持一致；
+#       该命名约定可能源于再预报（reforecast）档案，请确认实际数据来源。
+mse_star_by_level: dict = {}
+for _lev in MSE_LEVELS:
+    _t_lev = xr.open_dataset(
+        f"/data1/huangy/fig6/NC/MSE/ecmf_pl{_lev}_130_2022-08.grib", engine="cfgrib"
+    )["t"].loc[:, start_date, :, 44:35, 114:119]  # K
+    _z_lev = xr.open_dataset(
+        f"/data1/huangy/fig6/NC/MSE/ecmf_pl{_lev}_156_2022-08.grib", engine="cfgrib"
+    )["gh"].loc[:, start_date, :, 44:35, 114:119]  # m (geopotential height, param 156)
+    _qs_lev = _qsat(_t_lev, float(_lev))
+    # MSE* = cp*T + Lv*qsat(T,p) + g*z  （z 为几何高度 m，g*z 转为能量项）
+    mse_star_by_level[_lev] = cp * _t_lev + Lv * _qs_lev + g * _z_lev  # J/kg
+
+# --- MSEstar500 ---
+# 对应论文 CAPE scaling：CAPE ∝ MSEs - MSE*500  （Li & Tamarin-Brodsky 2026）
+mse_star_500 = mse_star_by_level[500]
+daily_max_mse_star500 = mse_star_500.resample(step="D").max()
+
+# --- LCL 压力（Bolton 1980）---
+lcl_p_da = _lcl_pressure(t2m_sfc, td2m_sfc, sp_sfc)  # hPa
+
+# --- MSEstar_max ---
+# 对应论文 "maximum MSE* in the lower free troposphere"（Li & Tamarin-Brodsky 2026）
+# 搜索范围：at or above LCL（level_hPa <= LCL_hPa）且 below 300 hPa（level_hPa > 300）
+# 即：300 < level_hPa <= LCL_hPa
+_mse_star_list_new = [
+    mse_star_by_level[_lev].assign_coords(level=_lev) for _lev in MSE_LEVELS
+]
+mse_star_all = xr.concat(_mse_star_list_new, dim="level")  # dim=(level, number, step, lat, lon)
+
+# level_coord 广播到 (level, number, step, lat, lon)，lcl_p_da 广播到 (level, ...)
+_level_coord = mse_star_all["level"]  # DataArray, dim=(level,)
+# 有效层掩码：高于 LCL（低压）且低于 300 hPa（高压侧边界）
+_valid_mask = (_level_coord > 300) & (_level_coord <= lcl_p_da)
+mse_star_max_da = mse_star_all.where(_valid_mask).max(dim="level")  # J/kg
+daily_max_mse_star_max = mse_star_max_da.resample(step="D").max()
+
+# --- Barrier = MSEstar_max - MSEs ---
+# 对应论文"residual energy barrier"（Li & Tamarin-Brodsky 2026）
+# Barrier > 0：上层 MSE* 高于近地面 MSE，存在阻碍深对流的能量障碍
+# 注：Barrier = MSEstar_max - MSEs（不要写反）
+barrier_da = mse_star_max_da - mse_s  # J/kg
+daily_max_barrier = barrier_da.resample(step="D").max()
 
 # =============================================================================
 # 2. 加载 S2S 前兆因子（起报后初始3天平均）
@@ -358,7 +494,7 @@ def compute_lmg(y: np.ndarray, X: np.ndarray, col_names: List[str],
 # 5. 主实验流程
 # =============================================================================
 print("\n" + "=" * 60)
-print("开始提取特征，建立单一模型（所有10个因子）...")
+print("开始提取特征，建立单一模型（所有12个因子）...")
 print("=" * 60)
 
 # --- 提取各因子（50个成员的集合均值，代表研究时段均值）---
@@ -367,11 +503,14 @@ sm_avg_val = extract_period_mean(daily_max_sm)
 NCHN_tp_val = extract_period_mean(daily_max_NCHNtp)
 WNPSH_avg_val = extract_period_mean(daily_max_z_WNPSH)
 SSR_Avg_val = extract_period_mean(daily_mean_ssr)
-Stability_NCHN_val = extract_period_mean(daily_max_stability)
 SHF_Avg_val = extract_period_mean(daily_mean_sshf)
 z500_2023_NCHN_val = extract_period_mean(daily_max_z_NCHN)
 z500_mean_NCHN_val = extract_period_mean(daily_max_z_refo_NCHN, is_reforecast=True)
 z500_anom_NCHN_val = z500_2023_NCHN_val - z500_mean_NCHN_val
+# MSE 热力因子（Li & Tamarin-Brodsky 2026）
+MSEstar_max_NCHN_val = extract_period_mean(daily_max_mse_star_max)
+MSEstar500_NCHN_val = extract_period_mean(daily_max_mse_star500)
+Barrier_NCHN_val = extract_period_mean(daily_max_barrier)
 
 data_dict = {
     "temp_mean": temp_mean_val,
@@ -381,7 +520,9 @@ data_dict = {
     "SSR_Avg": SSR_Avg_val,
     "SHF_Avg": SHF_Avg_val,
     "z500_anom_NCHN": z500_anom_NCHN_val,
-    "Stability_NCHN": Stability_NCHN_val,
+    "MSEstar_max_NCHN": MSEstar_max_NCHN_val,
+    "MSEstar500_NCHN": MSEstar500_NCHN_val,
+    "Barrier_NCHN": Barrier_NCHN_val,
     "NCVI": ncvi_arr,
     "ISM": ism_arr,
     "SST_Grad": sst_grad_arr,
@@ -440,7 +581,7 @@ ax_scatter.text(
     transform=ax_scatter.transAxes, fontsize=14, va="top",
     bbox=dict(facecolor="white", alpha=0.7),
 )
-ax_scatter.set_title("Predicted vs ECMWF T2max (All 10 Factors)", fontsize=16, pad=15)
+ax_scatter.set_title("Predicted vs ECMWF T2max (All 12 Factors)", fontsize=16, pad=15)
 ax_scatter.set_xlabel("ECMWF T2max (°C)", fontsize=14)
 ax_scatter.set_ylabel("Predicted T2max (°C)", fontsize=14)
 ax_scatter.text(-0.05, 1.05, "a)", transform=ax_scatter.transAxes, fontsize=20, weight="bold")
@@ -449,7 +590,7 @@ ax_scatter.text(-0.05, 1.05, "a)", transform=ax_scatter.transAxes, fontsize=20, 
 sorted_lmg = lmg_results.sort_values("normRelaImpt", ascending=False).reset_index(drop=True)
 display_labels = [LABEL_MAP.get(d, d) for d in sorted_lmg["driver"]]
 bars = ax_bar.bar(display_labels, sorted_lmg["normRelaImpt"], color="royalblue", alpha=0.7)
-ax_bar.set_title("LMG Relative Importance (All 10 Factors)", fontsize=16, pad=15)
+ax_bar.set_title("LMG Relative Importance (All 12 Factors)", fontsize=16, pad=15)
 ax_bar.set_ylabel("Normalized Relative Importance (%)", fontsize=14)
 ax_bar.set_xticks(range(len(display_labels)))
 ax_bar.set_xticklabels(display_labels, rotation=45, ha="right", fontsize=12)
@@ -482,7 +623,10 @@ ts_data_dict = {
     "SSR_Avg": extract_daily_timeseries(daily_mean_ssr),
     "SHF_Avg": extract_daily_timeseries(daily_mean_sshf),
     "z500_anom_NCHN": extract_daily_timeseries(daily_max_z_NCHN) - ts_z500_refo_mean,
-    "Stability_NCHN": extract_daily_timeseries(daily_max_stability),
+    # MSE 热力因子逐日时间序列（Li & Tamarin-Brodsky 2026）
+    "MSEstar_max_NCHN": extract_daily_timeseries(daily_max_mse_star_max),
+    "MSEstar500_NCHN": extract_daily_timeseries(daily_max_mse_star500),
+    "Barrier_NCHN": extract_daily_timeseries(daily_max_barrier),
     "NCVI": np.repeat(ncvi_arr.mean(), days_len),
     "ISM": np.repeat(ism_arr.mean(), days_len),
     "SST_Grad": np.repeat(sst_grad_arr.mean(), days_len),
@@ -506,7 +650,10 @@ per_member_feature_arrays = {
     "SSR_Avg": extract_daily_timeseries_per_member(daily_mean_ssr),
     "SHF_Avg": extract_daily_timeseries_per_member(daily_mean_sshf),
     "z500_anom_NCHN": ts_z500_members - ts_z500_refo_mean,
-    "Stability_NCHN": extract_daily_timeseries_per_member(daily_max_stability),
+    # MSE 热力因子逐成员时间序列（Li & Tamarin-Brodsky 2026）
+    "MSEstar_max_NCHN": extract_daily_timeseries_per_member(daily_max_mse_star_max),
+    "MSEstar500_NCHN": extract_daily_timeseries_per_member(daily_max_mse_star500),
+    "Barrier_NCHN": extract_daily_timeseries_per_member(daily_max_barrier),
 }
 for m in range(n_members):
     member_dict = {key: arr[m] for key, arr in per_member_feature_arrays.items()}
@@ -541,7 +688,7 @@ ax_ts.plot(plot_dates, era5_obs_ts, marker="^", color="black", lw=2.5, zorder=6,
 ax_ts.plot(plot_dates, ts_y_pred.values, marker="s", linestyle="--", color="dodgerblue",
            lw=2.5, zorder=5, label="Predicted $T_{max}$ (Ensemble Mean)")
 
-ax_ts.set_title("Time Series Evolution (All 10 Factors, LMG Model)", fontsize=16, pad=15)
+ax_ts.set_title("Time Series Evolution (All 12 Factors, LMG Model)", fontsize=16, pad=15)
 ax_ts.set_ylabel("T2max (°C)", fontsize=14)
 
 rmse = np.sqrt(np.mean((ts_y - ts_y_pred.values) ** 2))
@@ -576,7 +723,7 @@ sns.heatmap(
     corr_matrix, annot=True, cmap="coolwarm", fmt=".2f", vmin=-1, vmax=1,
     square=True, ax=ax_corr, cbar_kws={"shrink": 0.8}, annot_kws={"size": 10},
 )
-ax_corr.set_title("Feature and T2max Correlation Matrix (All 10 Factors)", fontsize=16, pad=20)
+ax_corr.set_title("Feature and T2max Correlation Matrix (All 12 Factors)", fontsize=16, pad=20)
 plt.tight_layout()
 out_corr = f"/data1/huangy/fig6/NC/1.s2s.fig_corr_LMG_{start_date}.png"
 plt.savefig(out_corr, dpi=300, bbox_inches="tight")
