@@ -219,6 +219,10 @@ sm_ds = xr.open_dataset(smfile, engine="cfgrib")
 _validate_dataset(sm_ds, "sm20 (soil moisture)")
 sm = sm_ds["sm20"].loc[:, start_date, :, 44:35, 114:119]
 daily_max_sm = sm.resample(step="D").max()
+# 修正：sm20 的 step 坐标标在 24h 窗口右边界，向左平移 1 天对齐物理有效时刻
+daily_max_sm = daily_max_sm.assign_coords(
+    step=daily_max_sm["step"] - pd.Timedelta(days=1)
+)
 
 # 1c. TP（降水）
 # 数据类型：累计量（step = 0h, 24h, 48h ... 自起报时刻的累计降水，Pa）
@@ -417,7 +421,15 @@ td2m_sfc = td2m_sfc_ds["d2m"].loc[:, start_date, :, 44:35, 114:119]  # K, daily-
 
 # 每个 step 值本身已是日均窗口（resample 等效于原值，保留以维持代码风格一致性）
 daily_mean_t2m = t2m_sfc.resample(step="D").mean()   # K, shape: (number, step, lat, lon)
+# 修正：2t 的 step 坐标标在 24h 窗口右边界，向左平移 1 天对齐物理有效时刻
+daily_mean_t2m = daily_mean_t2m.assign_coords(
+    step=daily_mean_t2m["step"] - pd.Timedelta(days=1)
+)
 daily_mean_td2m = td2m_sfc.resample(step="D").mean()  # K
+# 修正：2td 的 step 坐标标在 24h 窗口右边界，向左平移 1 天对齐物理有效时刻
+daily_mean_td2m = daily_mean_td2m.assign_coords(
+    step=daily_mean_td2m["step"] - pd.Timedelta(days=1)
+)
 
 # -----------------------------------------------------------------------
 # 载入 sp（瞬时量）并对齐为日均代理
