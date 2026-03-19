@@ -677,7 +677,8 @@ def extract_period_mean(daily_data, is_reforecast=False):
     dates = [start_time + pd.Timedelta(sv) for sv in step_vals.values]
     dates_ts = pd.to_datetime(dates)
     selected = daily_data.sel(
-        step=[s for s, d in zip(step_vals.values, dates_ts) if study_start <= d <= study_end]
+        step=[s for s, d in zip(step_vals.values, dates_ts)
+              if study_start.date() <= d.date() <= study_end.date()]
     )
     if is_reforecast:
         return selected.mean(dim=list(selected.dims)).values.flatten()[0]
@@ -702,7 +703,7 @@ def extract_daily_timeseries(daily_data, is_reforecast=False):
     dates_ts = pd.to_datetime(dates)
     avail_pairs = [
         (s, d) for s, d in zip(step_vals.values, dates_ts)
-        if study_start <= d <= study_end
+        if study_start.date() <= d.date() <= study_end.date()
     ]
 
     if not avail_pairs:
@@ -758,7 +759,7 @@ def extract_daily_timeseries_per_member(daily_data):
     dates_ts = pd.to_datetime(dates)
     avail_pairs = [
         (s, d) for s, d in zip(step_vals.values, dates_ts)
-        if study_start <= d <= study_end
+        if study_start.date() <= d.date() <= study_end.date()
     ]
 
     if not avail_pairs:
