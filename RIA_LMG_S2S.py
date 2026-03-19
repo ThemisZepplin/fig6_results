@@ -971,9 +971,9 @@ swanlab.log(
 )
 
 # =============================================================================
-# 6. 图1：散点图 + LMG 条形图
+# 6. 图1：LMG 预测散点图（独立保存）
 # =============================================================================
-fig_main, (ax_scatter, ax_bar) = plt.subplots(1, 2, figsize=(18, 7))
+fig_scatter_lmg, ax_scatter = plt.subplots(figsize=(8, 7))
 
 y_pred_full = model_full.predict(X_scaled_ols)
 slope, intercept, r_value, _, _ = linregress(y_final, y_pred_full)
@@ -988,10 +988,19 @@ ax_scatter.text(
     transform=ax_scatter.transAxes, fontsize=14, va="top",
     bbox=dict(facecolor="white", alpha=0.7),
 )
-ax_scatter.set_title("Predicted vs ECMWF T2max (All 12 Factors)", fontsize=16, pad=15)
+ax_scatter.set_title("LMG: Predicted vs ECMWF T2max (All 12 Factors)", fontsize=16, pad=15)
 ax_scatter.set_xlabel("ECMWF T2max (°C)", fontsize=14)
 ax_scatter.set_ylabel("Predicted T2max (°C)", fontsize=14)
-ax_scatter.text(-0.05, 1.05, "a)", transform=ax_scatter.transAxes, fontsize=20, weight="bold")
+plt.tight_layout()
+out_scatter_lmg = f"/data1/huangy/fig6/NC/1.s2s.fig_scatter_LMG_{start_date}.png"
+plt.savefig(out_scatter_lmg, dpi=300, bbox_inches="tight")
+plt.show()
+print(f"LMG 散点图已保存至: {out_scatter_lmg}")
+
+# =============================================================================
+# 6b. 图2：LMG 重要性棒格图（美化版，独立保存）
+# =============================================================================
+fig_bar_lmg, ax_bar = plt.subplots(figsize=(11, 7))
 
 # LMG 条形图（按重要性降序排列）
 sorted_lmg = lmg_results.sort_values("normRelaImpt", ascending=False).reset_index(drop=True)
@@ -1001,20 +1010,21 @@ ax_bar.set_title("LMG Relative Importance (All 12 Factors)", fontsize=16, pad=15
 ax_bar.set_ylabel("Normalized Relative Importance (%)", fontsize=14)
 ax_bar.set_xticks(range(len(display_labels)))
 ax_bar.set_xticklabels(display_labels, rotation=45, ha="right", fontsize=12)
-for bar, val in zip(bars, sorted_lmg["normRelaImpt"]):
+# 动态 ylim：预留顶部空间，防止数字标签截断
+_lmg_max_norm = sorted_lmg["normRelaImpt"].max()
+ax_bar.set_ylim(0, _lmg_max_norm * 1.40)
+for bar, (_, row) in zip(bars, sorted_lmg.iterrows()):
     ax_bar.text(
         bar.get_x() + bar.get_width() / 2.0,
-        bar.get_height() + 0.5,
-        f"{val:.1f}%",
-        ha="center", va="bottom", fontsize=11,
+        bar.get_height() + _lmg_max_norm * 0.02,
+        f"raw: {row['rawRelaImpt']:.3f}\nnorm: {row['normRelaImpt']:.1f}%",
+        ha="center", va="bottom", fontsize=10,
     )
-ax_bar.text(-0.05, 1.05, "b)", transform=ax_bar.transAxes, fontsize=20, weight="bold")
-
 plt.tight_layout()
-out_scatter = f"/data1/huangy/fig6/NC/1.s2s.fig_scatter_bar_LMG_{start_date}.png"
-plt.savefig(out_scatter, dpi=300, bbox_inches="tight")
+out_bar_lmg = f"/data1/huangy/fig6/NC/1.s2s.fig_bar_LMG_{start_date}.png"
+plt.savefig(out_bar_lmg, dpi=300, bbox_inches="tight")
 plt.show()
-print(f"散点图 + 条形图已保存至: {out_scatter}")
+print(f"LMG 棒格图已保存至: {out_bar_lmg}")
 
 # =============================================================================
 # 7. 逐日时间序列预测
@@ -1138,117 +1148,121 @@ plt.show()
 print(f"相关矩阵图已保存至: {out_corr}")
 
 # =============================================================================
-# 10. 图4：compute_lmg vs relativeIMP 方法对比图
-#     三子图：(a) 散点图  (b) 条形图对比  (c) 时间序列对比
+# 10. 图4：Johnson (relativeIMP) 预测散点图（独立保存）
 # =============================================================================
-print("\n生成 compute_lmg vs relativeIMP 方法对比图...")
+print("\n生成 Johnson (relativeIMP) 方法分析图...")
 
-fig_cmp, axes_cmp = plt.subplots(1, 3, figsize=(26, 7))
-ax_cmp_scatter, ax_cmp_bar, ax_cmp_ts = axes_cmp
-
-# ── (a) 散点图：预测值 vs 真实值（两种方法使用同一 OLS 模型，预测结果相同）──
+fig_scatter_ri, ax_ri_scatter = plt.subplots(figsize=(8, 7))
 slope_c, intercept_c, r_value_c, _, _ = linregress(y_final, y_pred_full)
-ax_cmp_scatter.scatter(y_final, y_pred_full, color="steelblue", alpha=0.65, s=90, zorder=3)
-ax_cmp_scatter.plot(
+ax_ri_scatter.scatter(y_final, y_pred_full, color="steelblue", alpha=0.65, s=90, zorder=3)
+ax_ri_scatter.plot(
     y_final, slope_c * y_final + intercept_c,
-    color="black", alpha=0.5, lw=2, label="Regression line",
+    color="black", alpha=0.5, lw=2,
 )
-text_cmp = (
+text_ri = (
     f"Corr: {r_value_c:.2f}\n$R^2$: {r_squared_full:.2f}\nAdj $R^2$: {r_squared_adj:.2f}"
 )
-ax_cmp_scatter.text(
-    0.05, 0.95, text_cmp,
-    transform=ax_cmp_scatter.transAxes, fontsize=13, va="top",
+ax_ri_scatter.text(
+    0.05, 0.95, text_ri,
+    transform=ax_ri_scatter.transAxes, fontsize=14, va="top",
     bbox=dict(facecolor="white", alpha=0.7),
 )
-ax_cmp_scatter.set_title("Predicted vs ECMWF T2max\n(OLS, All 12 Factors)", fontsize=14, pad=10)
-ax_cmp_scatter.set_xlabel("ECMWF T2max (°C)", fontsize=12)
-ax_cmp_scatter.set_ylabel("Predicted T2max (°C)", fontsize=12)
-ax_cmp_scatter.text(
-    -0.06, 1.06, "a)", transform=ax_cmp_scatter.transAxes, fontsize=18, weight="bold"
+ax_ri_scatter.set_title(
+    "Johnson (relativeIMP): Predicted vs ECMWF T2max\n(OLS, All 12 Factors)",
+    fontsize=15, pad=12,
 )
+ax_ri_scatter.set_xlabel("ECMWF T2max (°C)", fontsize=14)
+ax_ri_scatter.set_ylabel("Predicted T2max (°C)", fontsize=14)
+plt.tight_layout()
+out_scatter_ri = f"/data1/huangy/fig6/NC/1.s2s.fig_scatter_RI_{start_date}.png"
+plt.savefig(out_scatter_ri, dpi=300, bbox_inches="tight")
+plt.show()
+print(f"Johnson 散点图已保存至: {out_scatter_ri}")
 
-# ── (b) 条形图对比：LMG vs relativeIMP ──
-# 统一按 LMG 排序，两种方法使用相同因子顺序以便对比
-sorted_lmg_cmp = lmg_results.sort_values("normRelaImpt", ascending=False).reset_index(drop=True)
-ri_ordered = ri_results.set_index("driver").loc[sorted_lmg_cmp["driver"]].reset_index()
-display_labels_cmp = [LABEL_MAP.get(d, d) for d in sorted_lmg_cmp["driver"]]
-x_pos = np.arange(len(display_labels_cmp))
-bar_width = 0.38
-bars_lmg = ax_cmp_bar.bar(
-    x_pos - bar_width / 2, sorted_lmg_cmp["normRelaImpt"],
-    width=bar_width, color="royalblue", alpha=0.75, label="LMG (compute_lmg)",
+# =============================================================================
+# 10b. 图5：Johnson (relativeIMP) 重要性棒格图（美化版，独立保存）
+# =============================================================================
+fig_bar_ri, ax_ri_bar = plt.subplots(figsize=(11, 7))
+sorted_ri = ri_results.sort_values("normRelaImpt", ascending=False).reset_index(drop=True)
+display_labels_ri = [LABEL_MAP.get(d, d) for d in sorted_ri["driver"]]
+bars_ri_only = ax_ri_bar.bar(
+    display_labels_ri, sorted_ri["normRelaImpt"], color="darkorange", alpha=0.75,
 )
-bars_ri = ax_cmp_bar.bar(
-    x_pos + bar_width / 2, ri_ordered["normRelaImpt"],
-    width=bar_width, color="darkorange", alpha=0.75, label="relativeIMP",
+ax_ri_bar.set_title(
+    "Johnson (relativeIMP) Relative Importance (All 12 Factors)", fontsize=15, pad=15,
 )
-# 数值标注
-for bar, val in zip(bars_lmg, sorted_lmg_cmp["normRelaImpt"]):
-    ax_cmp_bar.text(
-        bar.get_x() + bar.get_width() / 2.0, bar.get_height() + 0.3,
-        f"{val:.1f}%", ha="center", va="bottom", fontsize=8.5, color="royalblue",
+ax_ri_bar.set_ylabel("Normalized Relative Importance (%)", fontsize=14)
+ax_ri_bar.set_xticks(range(len(display_labels_ri)))
+ax_ri_bar.set_xticklabels(display_labels_ri, rotation=45, ha="right", fontsize=12)
+# 动态 ylim：预留顶部空间，防止数字标签截断
+_ri_max_norm = sorted_ri["normRelaImpt"].max()
+ax_ri_bar.set_ylim(0, _ri_max_norm * 1.40)
+for bar, (_, row) in zip(bars_ri_only, sorted_ri.iterrows()):
+    ax_ri_bar.text(
+        bar.get_x() + bar.get_width() / 2.0,
+        bar.get_height() + _ri_max_norm * 0.02,
+        f"raw: {row['rawRelaImpt']:.3f}\nnorm: {row['normRelaImpt']:.1f}%",
+        ha="center", va="bottom", fontsize=10,
     )
-for bar, val in zip(bars_ri, ri_ordered["normRelaImpt"]):
-    ax_cmp_bar.text(
-        bar.get_x() + bar.get_width() / 2.0, bar.get_height() + 0.3,
-        f"{val:.1f}%", ha="center", va="bottom", fontsize=8.5, color="darkorange",
-    )
-ax_cmp_bar.set_title("Relative Importance: LMG vs relativeIMP\n(All 12 Factors)", fontsize=14, pad=10)
-ax_cmp_bar.set_ylabel("Normalized Relative Importance (%)", fontsize=12)
-ax_cmp_bar.set_xticks(x_pos)
-ax_cmp_bar.set_xticklabels(display_labels_cmp, rotation=45, ha="right", fontsize=10)
-ax_cmp_bar.legend(fontsize=11, loc="upper right")
-ax_cmp_bar.text(
-    -0.06, 1.06, "b)", transform=ax_cmp_bar.transAxes, fontsize=18, weight="bold"
-)
+plt.tight_layout()
+out_bar_ri = f"/data1/huangy/fig6/NC/1.s2s.fig_bar_RI_{start_date}.png"
+plt.savefig(out_bar_ri, dpi=300, bbox_inches="tight")
+plt.show()
+print(f"Johnson 棒格图已保存至: {out_bar_ri}")
 
-# ── (c) 时间序列对比：两种方法使用同一 OLS 模型，展示预测 vs 观测 ──
-# 集合展布（ECMWF 原始成员）
+# =============================================================================
+# 10c. 图6：Johnson (relativeIMP) 模型逐日时间序列图（独立保存）
+# =============================================================================
+fig_ts_ri, ax_ts_ri = plt.subplots(figsize=(14, 7))
 for m in range(n_members):
     lbl = "Ensemble Members (ECMWF)" if m == 0 else None
-    ax_cmp_ts.plot(
+    ax_ts_ri.plot(
         plot_dates, ts_tmx_members[m],
         color="lightcoral", alpha=0.2, lw=0.7, label=lbl,
     )
-ax_cmp_ts.plot(
+ax_ts_ri.plot(
     plot_dates, ts_y,
     marker="o", color="crimson", lw=2.2, zorder=5,
     label="ECMWF $T_{max}$ (Ensemble Mean)",
 )
-ax_cmp_ts.plot(
+ax_ts_ri.plot(
     plot_dates, era5_obs_ts,
     marker="^", color="black", lw=2.2, zorder=6, label="ERA5 Observation",
 )
-# OLS 预测（两种重要性方法共用同一回归模型）
-ax_cmp_ts.plot(
+ax_ts_ri.plot(
     plot_dates, ts_y_pred.values,
-    marker="s", linestyle="--", color="dodgerblue", lw=2.2, zorder=5,
-    label="OLS Prediction (LMG / relativeIMP)",
+    marker="s", linestyle="--", color="darkorange", lw=2.2, zorder=5,
+    label="OLS Prediction (Johnson / relativeIMP)",
 )
-rmse_cmp = np.sqrt(np.nanmean((ts_y - ts_y_pred.values) ** 2))
-ax_cmp_ts.text(
-    0.02, 0.95, f"RMSE: {rmse_cmp:.2f} °C",
-    transform=ax_cmp_ts.transAxes, fontsize=13,
+rmse_ri = np.sqrt(np.nanmean((ts_y - ts_y_pred.values) ** 2))
+ax_ts_ri.text(
+    0.02, 0.92, f"RMSE: {rmse_ri:.2f} °C",
+    transform=ax_ts_ri.transAxes, fontsize=16,
     bbox=dict(facecolor="white", alpha=0.8, edgecolor="gray"),
 )
-ax_cmp_ts.set_title("Time Series: OLS Prediction vs Observation\n(All 12 Factors)", fontsize=14, pad=10)
-ax_cmp_ts.set_ylabel("T2max (°C)", fontsize=12)
-ax_cmp_ts.xaxis.set_major_formatter(mdates.DateFormatter("%m-%d"))
-fig_cmp.autofmt_xdate(rotation=30)
-ax_cmp_ts.legend(fontsize=10, loc="lower right")
-ax_cmp_ts.grid(True, linestyle=":", alpha=0.7)
-ax_cmp_ts.text(
-    -0.06, 1.06, "c)", transform=ax_cmp_ts.transAxes, fontsize=18, weight="bold"
+ax_ts_ri.set_title(
+    "Time Series Evolution (All 12 Factors, Johnson / relativeIMP Model)",
+    fontsize=15, pad=12,
 )
-
+ax_ts_ri.set_ylabel("T2max (°C)", fontsize=14)
+ax_ts_ri.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m-%d"))
+fig_ts_ri.autofmt_xdate(rotation=30)
+ax_ts_ri.legend(fontsize=12, loc="lower right")
+ax_ts_ri.grid(True, linestyle=":", alpha=0.7)
 plt.tight_layout()
-out_cmp = f"/data1/huangy/fig6/NC/1.s2s.fig_compare_LMG_vs_RI_{start_date}.png"
-plt.savefig(out_cmp, dpi=300, bbox_inches="tight")
+out_ts_ri = f"/data1/huangy/fig6/NC/1.s2s.fig_ts_RI_{start_date}.png"
+plt.savefig(out_ts_ri, dpi=300, bbox_inches="tight")
 plt.show()
-print(f"compute_lmg vs relativeIMP 对比图已保存至: {out_cmp}")
+print(f"Johnson 时间序列图已保存至: {out_ts_ri}")
 
-swanlab.log({"comparison_plot": swanlab.Image(out_cmp)})
+swanlab.log({
+    "scatter_LMG": swanlab.Image(out_scatter_lmg),
+    "bar_LMG": swanlab.Image(out_bar_lmg),
+    "ts_LMG": swanlab.Image(out_ts),
+    "scatter_RI": swanlab.Image(out_scatter_ri),
+    "bar_RI": swanlab.Image(out_bar_ri),
+    "ts_RI": swanlab.Image(out_ts_ri),
+})
 
 swanlab.finish()
 print("\nLMG 相对重要性分析全部完成！")
