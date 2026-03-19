@@ -21,7 +21,7 @@ import os
 import warnings
 from itertools import permutations
 from math import factorial
-from typing import List
+from typing import Dict, List
 
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
@@ -1255,3 +1255,76 @@ swanlab.log({
 
 swanlab.finish()
 print("\nLMG 相对重要性分析全部完成！")
+
+# =============================================================================
+# 11. 前兆因子逐日时间序列图
+# =============================================================================
+# 静态因子（初始 3 天均值，50 成员各为标量）—— 在时间轴上铺平为水平直线展示
+_STATIC_FACTORS = {
+    "NCVI", "ISM", "SST_Grad",
+    "MSEstar_max_NCHN", "MSEstar500_NCHN", "Barrier_NCHN",
+}
+
+# 每个因子的逐成员时间序列数据：shape (50, days_len)
+_factor_member_ts: Dict[str, np.ndarray] = {}
+for _factor in FACTOR_COLS:
+    if _factor in _STATIC_FACTORS:
+        # 静态因子：将每个成员的标量沿时间轴重复，得到 (50, days_len) 的水平矩阵
+        _scalar_arr = {
+            "NCVI": ncvi_arr,
+            "ISM": ism_arr,
+            "SST_Grad": sst_grad_arr,
+            "MSEstar_max_NCHN": MSEstar_max_NCHN_val,
+            "MSEstar500_NCHN": MSEstar500_NCHN_val,
+            "Barrier_NCHN": Barrier_NCHN_val,
+        }[_factor]
+        _factor_member_ts[_factor] = np.stack(
+            [np.repeat(_scalar_arr[m], days_len) for m in range(n_members)]
+        )
+    else:
+        # 动态因子：直接从 per_member_feature_arrays 取 (50, days_len) 数组
+        _factor_member_ts[_factor] = per_member_feature_arrays[_factor]
+
+# 绘图
+_plot_dates = pd.date_range(start=study_start, end=study_end)
+_nrows, _ncols = 4, 3
+fig_all_factors, axes_all = plt.subplots(
+    _nrows, _ncols, figsize=(20, 15), sharex=False
+)
+axes_all_flat = axes_all.flatten()
+
+for _idx, _factor in enumerate(FACTOR_COLS):
+    _ax = axes_all_flat[_idx]
+    _member_data = _factor_member_ts[_factor]          # (50, days_len)
+    _ensemble_mean = _member_data.mean(axis=0)          # (days_len,)
+
+    # 绘制 50 条成员预测线
+    for _m in range(n_members):
+        _ax.plot(
+            _plot_dates, _member_data[_m],
+            color="gray", lw=0.6, alpha=0.3,
+        )
+    # 绘制集合均值
+    _ax.plot(
+        _plot_dates, _ensemble_mean,
+        color="#1f4e79", lw=2.2, marker="o", markersize=4,
+        zorder=5, label="Ensemble Mean",
+    )
+    _ax.set_title(LABEL_MAP.get(_factor, _factor).replace("\n", " "), fontsize=11)
+    _ax.xaxis.set_major_formatter(mdates.DateFormatter("%m-%d"))
+    _ax.tick_params(axis="x", rotation=45, labelsize=8)
+    _ax.grid(True, linestyle=":", alpha=0.6)
+
+# 隐藏多余的空子图（FACTOR_COLS 为 12，4×3 恰好填满，无需隐藏）
+for _idx in range(len(FACTOR_COLS), len(axes_all_flat)):
+    axes_all_flat[_idx].set_visible(False)
+
+fig_all_factors.suptitle(
+    f"S2S Ensemble Forecast — All 12 Factor Time Series ({start_date})",
+    fontsize=14, y=1.01,
+)
+plt.tight_layout()
+out_all_factors = f"{OUT_DIR}/1.s2s.fig_ts_all_factors_{start_date}.png"
+plt.savefig(out_all_factors, dpi=150, bbox_inches="tight")
+plt.show()
+print(f"前兆因子时间序列图已保存至: {out_all_factors}")
