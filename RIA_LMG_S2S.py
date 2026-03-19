@@ -1007,15 +1007,13 @@ ax_bar.set_title("LMG Relative Importance (All 12 Factors)", fontsize=16, pad=15
 ax_bar.set_ylabel("Normalized Relative Importance (%)", fontsize=14)
 ax_bar.set_xticks(range(len(display_labels)))
 ax_bar.set_xticklabels(display_labels, rotation=45, ha="right", fontsize=12)
-# 动态 ylim：预留顶部空间，防止数字标签截断
-_lmg_max_norm = sorted_lmg["normRelaImpt"].max()
-ax_bar.set_ylim(0, _lmg_max_norm * 1.40)
+ax_bar.set_ylim(0, 25)
 for bar, (_, row) in zip(bars, sorted_lmg.iterrows()):
     ax_bar.text(
         bar.get_x() + bar.get_width() / 2.0,
-        bar.get_height() + _lmg_max_norm * 0.02,
+        bar.get_height() + 0.3,
         f"raw: {row['rawRelaImpt']:.3f}\nnorm: {row['normRelaImpt']:.1f}%",
-        ha="center", va="bottom", fontsize=10,
+        ha="center", va="bottom", fontsize=10, rotation=90,
     )
 plt.tight_layout()
 out_combined_lmg = f"{OUT_DIR}/1.s2s.fig_combined_LMG_{start_date}.png"
@@ -1182,15 +1180,13 @@ ax_ri_bar.set_title(
 ax_ri_bar.set_ylabel("Normalized Relative Importance (%)", fontsize=14)
 ax_ri_bar.set_xticks(range(len(display_labels_ri)))
 ax_ri_bar.set_xticklabels(display_labels_ri, rotation=45, ha="right", fontsize=12)
-# 动态 ylim：预留顶部空间，防止数字标签截断
-_ri_max_norm = sorted_ri["normRelaImpt"].max()
-ax_ri_bar.set_ylim(0, _ri_max_norm * 1.40)
+ax_ri_bar.set_ylim(0, 25)
 for bar, (_, row) in zip(bars_ri_only, sorted_ri.iterrows()):
     ax_ri_bar.text(
         bar.get_x() + bar.get_width() / 2.0,
-        bar.get_height() + _ri_max_norm * 0.02,
+        bar.get_height() + 0.3,
         f"raw: {row['rawRelaImpt']:.3f}\nnorm: {row['normRelaImpt']:.1f}%",
-        ha="center", va="bottom", fontsize=10,
+        ha="center", va="bottom", fontsize=10, rotation=90,
     )
 plt.tight_layout()
 out_combined_ri = f"{OUT_DIR}/1.s2s.fig_combined_RI_{start_date}.png"
@@ -1208,6 +1204,12 @@ for m in range(n_members):
         plot_dates, ts_tmx_members[m],
         color="lightcoral", alpha=0.2, lw=0.7, label=lbl,
     )
+for m in range(n_members):
+    lbl = "Ensemble Members (Predicted)" if m == 0 else None
+    ax_ts_ri.plot(
+        plot_dates, ts_member_preds[m],
+        color="#add8e6", alpha=0.15, lw=0.7, label=lbl,
+    )
 ax_ts_ri.plot(
     plot_dates, ts_y,
     marker="o", color="crimson", lw=2.2, zorder=5,
@@ -1219,7 +1221,7 @@ ax_ts_ri.plot(
 )
 ax_ts_ri.plot(
     plot_dates, ts_y_pred.values,
-    marker="s", linestyle="--", color="darkorange", lw=2.2, zorder=5,
+    marker="s", linestyle="--", color="#add8e6", lw=2.2, zorder=5,
     label="OLS Prediction (Johnson / relativeIMP)",
 )
 rmse_ri = np.sqrt(np.nanmean((ts_y - ts_y_pred.values) ** 2))
