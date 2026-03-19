@@ -17,6 +17,7 @@
   - Barrier     = MSEstar_max - MSEs  (残余能量障碍)
 """
 
+import os
 import warnings
 from itertools import permutations
 from math import factorial
@@ -65,18 +66,21 @@ FACTOR_COLS = [
 LABEL_MAP = {
     "temp_mean": "T2max",
     "NCHN_tp": "NCHN\nPrecip",
-    "sm_avg": "SM\n(Avg)",
-    "WNPSH": "WNPSH\n(Avg)",
-    "SSR_Avg": "SSR\n(Avg)",
+    "sm_avg": "SM",
+    "WNPSH": "WNPSH",
+    "SSR_Avg": "SSR",
     "SHF_Avg": "Sensible\nHeat",
     "z500_anom_NCHN": "NCHN\nZ500",
     "MSEstar_max_NCHN": "MSE*max\nNCHN",
     "MSEstar500_NCHN": "MSE*500\nNCHN",
     "Barrier_NCHN": "Barrier\nNCHN",
-    "NCVI": "NCVI\n(S2S)",
-    "ISM": "ISM\n(S2S)",
-    "SST_Grad": "SST Grad\n(S2S)",
+    "NCVI": "NCVI",
+    "ISM": "ISM",
+    "SST_Grad": "SST Grad",
 }
+
+# 所有图表统一输出目录
+OUT_DIR = "/data1/huangy/fig6/NC/v3"
 
 # 蒙特卡洛采样置换数（当 p! 过大时使用）
 MC_SAMPLES = 10000
@@ -972,9 +976,11 @@ swanlab.log(
 )
 
 # =============================================================================
-# 6. 图1：LMG 预测散点图（独立保存）
+# 6. 图1+图2：LMG 预测散点图 + 重要性棒格图（合并保存）
 # =============================================================================
-fig_scatter_lmg, ax_scatter = plt.subplots(figsize=(8, 7))
+os.makedirs(OUT_DIR, exist_ok=True)
+
+fig_lmg, (ax_scatter, ax_bar) = plt.subplots(1, 2, figsize=(18, 7))
 
 y_pred_full = model_full.predict(X_scaled_ols)
 slope, intercept, r_value, _, _ = linregress(y_final, y_pred_full)
@@ -992,16 +998,6 @@ ax_scatter.text(
 ax_scatter.set_title("LMG: Predicted vs ECMWF T2max (All 12 Factors)", fontsize=16, pad=15)
 ax_scatter.set_xlabel("ECMWF T2max (°C)", fontsize=14)
 ax_scatter.set_ylabel("Predicted T2max (°C)", fontsize=14)
-plt.tight_layout()
-out_scatter_lmg = f"/data1/huangy/fig6/NC/1.s2s.fig_scatter_LMG_{start_date}.png"
-plt.savefig(out_scatter_lmg, dpi=300, bbox_inches="tight")
-plt.show()
-print(f"LMG 散点图已保存至: {out_scatter_lmg}")
-
-# =============================================================================
-# 6b. 图2：LMG 重要性棒格图（美化版，独立保存）
-# =============================================================================
-fig_bar_lmg, ax_bar = plt.subplots(figsize=(11, 7))
 
 # LMG 条形图（按重要性降序排列）
 sorted_lmg = lmg_results.sort_values("normRelaImpt", ascending=False).reset_index(drop=True)
@@ -1022,10 +1018,10 @@ for bar, (_, row) in zip(bars, sorted_lmg.iterrows()):
         ha="center", va="bottom", fontsize=10,
     )
 plt.tight_layout()
-out_bar_lmg = f"/data1/huangy/fig6/NC/1.s2s.fig_bar_LMG_{start_date}.png"
-plt.savefig(out_bar_lmg, dpi=300, bbox_inches="tight")
+out_combined_lmg = f"{OUT_DIR}/1.s2s.fig_combined_LMG_{start_date}.png"
+plt.savefig(out_combined_lmg, dpi=300, bbox_inches="tight")
 plt.show()
-print(f"LMG 棒格图已保存至: {out_bar_lmg}")
+print(f"LMG 散点+棒格合并图已保存至: {out_combined_lmg}")
 
 # =============================================================================
 # 7. 逐日时间序列预测
@@ -1120,7 +1116,7 @@ fig_ts.autofmt_xdate(rotation=30)
 ax_ts.legend(fontsize=12)
 ax_ts.grid(True, linestyle=":", alpha=0.7)
 plt.tight_layout()
-out_ts = f"/data1/huangy/fig6/NC/1.s2s.fig_ts_LMG_{start_date}.png"
+out_ts = f"{OUT_DIR}/1.s2s.fig_ts_LMG_{start_date}.png"
 plt.savefig(out_ts, dpi=300, bbox_inches="tight")
 plt.show()
 print(f"时间序列图已保存至: {out_ts}")
@@ -1143,17 +1139,17 @@ sns.heatmap(
 )
 ax_corr.set_title("Feature and T2max Correlation Matrix (All 12 Factors)", fontsize=16, pad=20)
 plt.tight_layout()
-out_corr = f"/data1/huangy/fig6/NC/1.s2s.fig_corr_LMG_{start_date}.png"
+out_corr = f"{OUT_DIR}/1.s2s.fig_corr_LMG_{start_date}.png"
 plt.savefig(out_corr, dpi=300, bbox_inches="tight")
 plt.show()
 print(f"相关矩阵图已保存至: {out_corr}")
 
 # =============================================================================
-# 10. 图4：Johnson (relativeIMP) 预测散点图（独立保存）
+# 10. 图4+图5：Johnson (relativeIMP) 预测散点图 + 重要性棒格图（合并保存）
 # =============================================================================
 print("\n生成 Johnson (relativeIMP) 方法分析图...")
 
-fig_scatter_ri, ax_ri_scatter = plt.subplots(figsize=(8, 7))
+fig_ri, (ax_ri_scatter, ax_ri_bar) = plt.subplots(1, 2, figsize=(18, 7))
 slope_c, intercept_c, r_value_c, _, _ = linregress(y_final, y_pred_full)
 ax_ri_scatter.scatter(y_final, y_pred_full, color="steelblue", alpha=0.65, s=90, zorder=3)
 ax_ri_scatter.plot(
@@ -1174,16 +1170,7 @@ ax_ri_scatter.set_title(
 )
 ax_ri_scatter.set_xlabel("ECMWF T2max (°C)", fontsize=14)
 ax_ri_scatter.set_ylabel("Predicted T2max (°C)", fontsize=14)
-plt.tight_layout()
-out_scatter_ri = f"/data1/huangy/fig6/NC/1.s2s.fig_scatter_RI_{start_date}.png"
-plt.savefig(out_scatter_ri, dpi=300, bbox_inches="tight")
-plt.show()
-print(f"Johnson 散点图已保存至: {out_scatter_ri}")
 
-# =============================================================================
-# 10b. 图5：Johnson (relativeIMP) 重要性棒格图（美化版，独立保存）
-# =============================================================================
-fig_bar_ri, ax_ri_bar = plt.subplots(figsize=(11, 7))
 sorted_ri = ri_results.sort_values("normRelaImpt", ascending=False).reset_index(drop=True)
 display_labels_ri = [LABEL_MAP.get(d, d) for d in sorted_ri["driver"]]
 bars_ri_only = ax_ri_bar.bar(
@@ -1206,10 +1193,10 @@ for bar, (_, row) in zip(bars_ri_only, sorted_ri.iterrows()):
         ha="center", va="bottom", fontsize=10,
     )
 plt.tight_layout()
-out_bar_ri = f"/data1/huangy/fig6/NC/1.s2s.fig_bar_RI_{start_date}.png"
-plt.savefig(out_bar_ri, dpi=300, bbox_inches="tight")
+out_combined_ri = f"{OUT_DIR}/1.s2s.fig_combined_RI_{start_date}.png"
+plt.savefig(out_combined_ri, dpi=300, bbox_inches="tight")
 plt.show()
-print(f"Johnson 棒格图已保存至: {out_bar_ri}")
+print(f"Johnson 散点+棒格合并图已保存至: {out_combined_ri}")
 
 # =============================================================================
 # 10c. 图6：Johnson (relativeIMP) 模型逐日时间序列图（独立保存）
@@ -1251,17 +1238,16 @@ fig_ts_ri.autofmt_xdate(rotation=30)
 ax_ts_ri.legend(fontsize=12, loc="lower right")
 ax_ts_ri.grid(True, linestyle=":", alpha=0.7)
 plt.tight_layout()
-out_ts_ri = f"/data1/huangy/fig6/NC/1.s2s.fig_ts_RI_{start_date}.png"
+out_ts_ri = f"{OUT_DIR}/1.s2s.fig_ts_RI_{start_date}.png"
 plt.savefig(out_ts_ri, dpi=300, bbox_inches="tight")
 plt.show()
 print(f"Johnson 时间序列图已保存至: {out_ts_ri}")
 
 swanlab.log({
-    "scatter_LMG": swanlab.Image(out_scatter_lmg),
-    "bar_LMG": swanlab.Image(out_bar_lmg),
+    "combined_LMG": swanlab.Image(out_combined_lmg),
     "ts_LMG": swanlab.Image(out_ts),
-    "scatter_RI": swanlab.Image(out_scatter_ri),
-    "bar_RI": swanlab.Image(out_bar_ri),
+    "corr_LMG": swanlab.Image(out_corr),
+    "combined_RI": swanlab.Image(out_combined_ri),
     "ts_RI": swanlab.Image(out_ts_ri),
 })
 
