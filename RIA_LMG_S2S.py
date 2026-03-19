@@ -29,6 +29,7 @@ import pandas as pd
 import seaborn as sns
 import statsmodels.api as sm_api
 import xarray as xr
+from relativeImp import relativeImp
 from scipy.stats import linregress
 from sklearn.preprocessing import StandardScaler
 
@@ -710,6 +711,23 @@ def extract_daily_timeseries(daily_data, is_reforecast=False):
         day_idx = int(pd.Timedelta(step).days) - study_start_day
         if 0 <= day_idx < _N_STUDY_DAYS:
             result[day_idx] = avail_values[i]
+
+    # 末尾 NaN 前向填充：若 study_end 步次缺失（数据文件覆盖不足），
+    # 用最近一个有效日的值填充，并发出警告，确保时间序列完整至 study_end。
+    for i in range(1, _N_STUDY_DAYS):
+        if np.isnan(result[i]) and not np.isnan(result[i - 1]):
+            # 只在连续末尾缺失时进行前向填充
+            is_trailing = all(np.isnan(result[i:]))
+            if is_trailing:
+                fill_date = (study_start + pd.Timedelta(days=i)).date()
+                warnings.warn(
+                    f"extract_daily_timeseries: {fill_date} 步次缺失，"
+                    f"用前一有效日值前向填充（数据文件覆盖不足）",
+                    UserWarning,
+                    stacklevel=2,
+                )
+                result[i:] = result[i - 1]
+                break
     return result
 
 
@@ -754,6 +772,24 @@ def extract_daily_timeseries_per_member(daily_data):
         day_idx = int(pd.Timedelta(step).days) - study_start_day
         if 0 <= day_idx < _N_STUDY_DAYS:
             result[:, day_idx] = avail_values[:, i]
+
+    # 末尾列 NaN 前向填充：若 study_end 步次缺失（数据文件覆盖不足），
+    # 用最近一个有效列的值填充，确保所有成员的时间序列完整至 study_end。
+    for i in range(1, _N_STUDY_DAYS):
+        col = result[:, i]
+        if np.all(np.isnan(col)) and not np.all(np.isnan(result[:, i - 1])):
+            is_trailing = all(np.all(np.isnan(result[:, j])) for j in range(i, _N_STUDY_DAYS))
+            if is_trailing:
+                fill_date = (study_start + pd.Timedelta(days=i)).date()
+                warnings.warn(
+                    f"extract_daily_timeseries_per_member: {fill_date} 步次缺失，"
+                    f"用前一有效日值前向填充（数据文件覆盖不足）",
+                    UserWarning,
+                    stacklevel=2,
+                )
+                for j in range(i, _N_STUDY_DAYS):
+                    result[:, j] = result[:, i - 1]
+                break
     return result  # shape: (n_members, _N_STUDY_DAYS)
 
 
@@ -908,6 +944,20 @@ swanlab.log(
     }
 )
 
+# --- relativeIMP 相对重要性（Johnson 相对权重法，基于相关矩阵特征分解）---
+print("\n计算 relativeIMP 相对重要性（Johnson 相对权重法）...")
+ri_df = data_df[["temp_mean"] + FACTOR_COLS].copy()
+ri_results = relativeImp(ri_df, outcomeName="temp_mean", driverNames=FACTOR_COLS)
+print("\nrelativeIMP 相对重要性结果：")
+print(ri_results.to_string(index=False))
+
+swanlab.log(
+    {
+        **{f"RI_{row['driver']}": row["rawRelaImpt"] for _, row in ri_results.iterrows()},
+        **{f"RI_norm_{row['driver']}": row["normRelaImpt"] for _, row in ri_results.iterrows()},
+    }
+)
+
 # =============================================================================
 # 6. 图1：散点图 + LMG 条形图
 # =============================================================================
@@ -1036,7 +1086,7 @@ ax_ts.plot(plot_dates, ts_y_pred.values, marker="s", linestyle="--", color="dodg
 ax_ts.set_title("Time Series Evolution (All 12 Factors, LMG Model)", fontsize=16, pad=15)
 ax_ts.set_ylabel("T2max (°C)", fontsize=14)
 
-rmse = np.sqrt(np.mean((ts_y - ts_y_pred.values) ** 2))
+rmse = np.sqrt(np.nanmean((ts_y - ts_y_pred.values) ** 2))
 ax_ts.text(
     0.02, 0.92, f"RMSE: {rmse:.2f} °C",
     transform=ax_ts.transAxes, fontsize=16,
@@ -1074,6 +1124,119 @@ out_corr = f"/data1/huangy/fig6/NC/1.s2s.fig_corr_LMG_{start_date}.png"
 plt.savefig(out_corr, dpi=300, bbox_inches="tight")
 plt.show()
 print(f"相关矩阵图已保存至: {out_corr}")
+
+# =============================================================================
+# 10. 图4：compute_lmg vs relativeIMP 方法对比图
+#     三子图：(a) 散点图  (b) 条形图对比  (c) 时间序列对比
+# =============================================================================
+print("\n生成 compute_lmg vs relativeIMP 方法对比图...")
+
+fig_cmp, axes_cmp = plt.subplots(1, 3, figsize=(26, 7))
+ax_cmp_scatter, ax_cmp_bar, ax_cmp_ts = axes_cmp
+
+# ── (a) 散点图：预测值 vs 真实值（两种方法使用同一 OLS 模型，预测结果相同）──
+slope_c, intercept_c, r_value_c, _, _ = linregress(y_final, y_pred_full)
+ax_cmp_scatter.scatter(y_final, y_pred_full, color="steelblue", alpha=0.65, s=90, zorder=3)
+ax_cmp_scatter.plot(
+    y_final, slope_c * y_final + intercept_c,
+    color="black", alpha=0.5, lw=2, label="Regression line",
+)
+text_cmp = (
+    f"Corr: {r_value_c:.2f}\n$R^2$: {r_squared_full:.2f}\nAdj $R^2$: {r_squared_adj:.2f}"
+)
+ax_cmp_scatter.text(
+    0.05, 0.95, text_cmp,
+    transform=ax_cmp_scatter.transAxes, fontsize=13, va="top",
+    bbox=dict(facecolor="white", alpha=0.7),
+)
+ax_cmp_scatter.set_title("Predicted vs ECMWF T2max\n(OLS, All 12 Factors)", fontsize=14, pad=10)
+ax_cmp_scatter.set_xlabel("ECMWF T2max (°C)", fontsize=12)
+ax_cmp_scatter.set_ylabel("Predicted T2max (°C)", fontsize=12)
+ax_cmp_scatter.text(
+    -0.06, 1.06, "a)", transform=ax_cmp_scatter.transAxes, fontsize=18, weight="bold"
+)
+
+# ── (b) 条形图对比：LMG vs relativeIMP ──
+# 统一按 LMG 排序，两种方法使用相同因子顺序以便对比
+sorted_lmg_cmp = lmg_results.sort_values("normRelaImpt", ascending=False).reset_index(drop=True)
+ri_ordered = ri_results.set_index("driver").loc[sorted_lmg_cmp["driver"]].reset_index()
+display_labels_cmp = [LABEL_MAP.get(d, d) for d in sorted_lmg_cmp["driver"]]
+x_pos = np.arange(len(display_labels_cmp))
+bar_width = 0.38
+bars_lmg = ax_cmp_bar.bar(
+    x_pos - bar_width / 2, sorted_lmg_cmp["normRelaImpt"],
+    width=bar_width, color="royalblue", alpha=0.75, label="LMG (compute_lmg)",
+)
+bars_ri = ax_cmp_bar.bar(
+    x_pos + bar_width / 2, ri_ordered["normRelaImpt"],
+    width=bar_width, color="darkorange", alpha=0.75, label="relativeIMP",
+)
+# 数值标注
+for bar, val in zip(bars_lmg, sorted_lmg_cmp["normRelaImpt"]):
+    ax_cmp_bar.text(
+        bar.get_x() + bar.get_width() / 2.0, bar.get_height() + 0.3,
+        f"{val:.1f}%", ha="center", va="bottom", fontsize=8.5, color="royalblue",
+    )
+for bar, val in zip(bars_ri, ri_ordered["normRelaImpt"]):
+    ax_cmp_bar.text(
+        bar.get_x() + bar.get_width() / 2.0, bar.get_height() + 0.3,
+        f"{val:.1f}%", ha="center", va="bottom", fontsize=8.5, color="darkorange",
+    )
+ax_cmp_bar.set_title("Relative Importance: LMG vs relativeIMP\n(All 12 Factors)", fontsize=14, pad=10)
+ax_cmp_bar.set_ylabel("Normalized Relative Importance (%)", fontsize=12)
+ax_cmp_bar.set_xticks(x_pos)
+ax_cmp_bar.set_xticklabels(display_labels_cmp, rotation=45, ha="right", fontsize=10)
+ax_cmp_bar.legend(fontsize=11, loc="upper right")
+ax_cmp_bar.text(
+    -0.06, 1.06, "b)", transform=ax_cmp_bar.transAxes, fontsize=18, weight="bold"
+)
+
+# ── (c) 时间序列对比：两种方法使用同一 OLS 模型，展示预测 vs 观测 ──
+# 集合展布（ECMWF 原始成员）
+for m in range(n_members):
+    lbl = "Ensemble Members (ECMWF)" if m == 0 else None
+    ax_cmp_ts.plot(
+        plot_dates, ts_tmx_members[m],
+        color="lightcoral", alpha=0.2, lw=0.7, label=lbl,
+    )
+ax_cmp_ts.plot(
+    plot_dates, ts_y,
+    marker="o", color="crimson", lw=2.2, zorder=5,
+    label="ECMWF $T_{max}$ (Ensemble Mean)",
+)
+ax_cmp_ts.plot(
+    plot_dates, era5_obs_ts,
+    marker="^", color="black", lw=2.2, zorder=6, label="ERA5 Observation",
+)
+# OLS 预测（两种重要性方法共用同一回归模型）
+ax_cmp_ts.plot(
+    plot_dates, ts_y_pred.values,
+    marker="s", linestyle="--", color="dodgerblue", lw=2.2, zorder=5,
+    label="OLS Prediction (LMG / relativeIMP)",
+)
+rmse_cmp = np.sqrt(np.nanmean((ts_y - ts_y_pred.values) ** 2))
+ax_cmp_ts.text(
+    0.02, 0.95, f"RMSE: {rmse_cmp:.2f} °C",
+    transform=ax_cmp_ts.transAxes, fontsize=13,
+    bbox=dict(facecolor="white", alpha=0.8, edgecolor="gray"),
+)
+ax_cmp_ts.set_title("Time Series: OLS Prediction vs Observation\n(All 12 Factors)", fontsize=14, pad=10)
+ax_cmp_ts.set_ylabel("T2max (°C)", fontsize=12)
+ax_cmp_ts.xaxis.set_major_formatter(mdates.DateFormatter("%m-%d"))
+fig_cmp.autofmt_xdate(rotation=30)
+ax_cmp_ts.legend(fontsize=10, loc="lower right")
+ax_cmp_ts.grid(True, linestyle=":", alpha=0.7)
+ax_cmp_ts.text(
+    -0.06, 1.06, "c)", transform=ax_cmp_ts.transAxes, fontsize=18, weight="bold"
+)
+
+plt.tight_layout()
+out_cmp = f"/data1/huangy/fig6/NC/1.s2s.fig_compare_LMG_vs_RI_{start_date}.png"
+plt.savefig(out_cmp, dpi=300, bbox_inches="tight")
+plt.show()
+print(f"compute_lmg vs relativeIMP 对比图已保存至: {out_cmp}")
+
+swanlab.log({"comparison_plot": swanlab.Image(out_cmp)})
 
 swanlab.finish()
 print("\nLMG 相对重要性分析全部完成！")
