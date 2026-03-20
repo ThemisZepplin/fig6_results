@@ -1260,6 +1260,21 @@ print("\nLMG 相对重要性分析全部完成！")
 # 11. 前兆因子逐日时间序列图（面条图，6.12–6.24 共 13 天）
 # =============================================================================
 
+YLABEL_MAP = {
+    "NCHN_tp":            "Precipitation (m)",
+    "sm_avg":             "Soil Moisture ($m^3/m^3$)",
+    "WNPSH":              "850hPa Geopotential Height (m)",
+    "SSR_Avg":            "Net Shortwave Radiation ($W/m^2$)",
+    "SHF_Avg":            "Sensible Heat Flux ($W/m^2$)",
+    "z500_anom_NCHN":     "Z500 Anomaly (m)",
+    "NCVI":               "Potential Vorticity (PVU)",
+    "ISM":                "Monsoon Precip (m)",
+    "SST_Grad":           "SST Gradient (K)",
+    "MSEstar_max_NCHN":   "Max $MSE^*$ ($J/kg$)",
+    "MSEstar500_NCHN":    "$MSE^*_{500}$ ($J/kg$)",
+    "Barrier_NCHN":       "Energy Barrier ($J/kg$)",
+}
+
 _N_FULL_11 = (study_end - start_time).days + 1           # 13 天
 _full_plot_dates = pd.date_range(start=start_time, end=study_end)
 
@@ -1406,6 +1421,7 @@ def _plot_ts11_group(
             label="Ensemble Mean",
         )
         ax.set_title(LABEL_MAP.get(_fac, _fac).replace("\n", " "), fontsize=11)
+        ax.set_ylabel(YLABEL_MAP.get(_fac, ""), fontsize=9)
         ax.xaxis.set_major_formatter(mdates.DateFormatter("%m-%d"))
         ax.tick_params(axis="x", rotation=45, labelsize=8)
         ax.grid(True, linestyle=":", alpha=0.6)
