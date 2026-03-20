@@ -1245,12 +1245,146 @@ plt.savefig(out_ts_ri, dpi=300, bbox_inches="tight")
 plt.show()
 print(f"Johnson 时间序列图已保存至: {out_ts_ri}")
 
+# =============================================================================
+# 11. 图7+图8：12 个因子 S2S 集合预报时间序列图（全程 6.12–6.24, 13 天）
+# =============================================================================
+print("\n生成 12 个因子时间序列图（6.12–6.24）...")
+
+_FULL_DAYS = (study_end - start_time).days + 1  # = 13
+plot_dates_full = pd.date_range(start=start_time, end=study_end)
+
+
+def _extract_full13_ts_per_member(daily_data):
+    """从 start_time (6.12) 到 study_end (6.24) 提取每成员逐日序列。
+    返回 (n_members, _FULL_DAYS) 数组，缺失步次填 NaN。
+    day_idx = int(Timedelta(step).days) 直接作为 0-based 天数偏移。
+    """
+    step_vals = daily_data.step
+    dates = [start_time + pd.Timedelta(sv) for sv in step_vals.values]
+    dates_ts = pd.to_datetime(dates)
+    avail_pairs = [
+        (s, d) for s, d in zip(step_vals.values, dates_ts)
+        if start_time.date() <= d.date() <= study_end.date()
+    ]
+    if not avail_pairs:
+        n_members = daily_data.sizes.get("number", 1)
+        return np.full((n_members, _FULL_DAYS), np.nan)
+    avail_steps, _ = zip(*avail_pairs)
+    selected = daily_data.sel(step=list(avail_steps))
+    dims_to_mean = [d for d in selected.dims if d not in ("step", "number")]
+    result_sel = selected.mean(dim=dims_to_mean) if dims_to_mean else selected
+    if "number" in result_sel.dims and "step" in result_sel.dims:
+        result_sel = result_sel.transpose("number", "step")
+    avail_values = result_sel.values  # (n_members, n_avail)
+    n_members = avail_values.shape[0]
+    result = np.full((n_members, _FULL_DAYS), np.nan)
+    for _i, _sv in enumerate(avail_steps):
+        _di = int(pd.Timedelta(_sv).days)
+        if 0 <= _di < _FULL_DAYS:
+            result[:, _di] = avail_values[:, _i]
+    return result
+
+
+# 第一类：9 个动态因子（直接从已有日变量提取全 13 天）
+_ts13_nchn_tp  = _extract_full13_ts_per_member(daily_max_NCHNtp)
+_ts13_sm       = _extract_full13_ts_per_member(daily_max_sm)
+_ts13_wnpsh    = _extract_full13_ts_per_member(daily_max_z_WNPSH)
+_ts13_ssr      = _extract_full13_ts_per_member(daily_mean_ssr)
+_ts13_shf      = _extract_full13_ts_per_member(daily_mean_sshf)
+_ts13_z500_raw = _extract_full13_ts_per_member(daily_max_z_NCHN)
+_ts13_mse_max  = _extract_full13_ts_per_member(daily_max_mse_star_max)
+_ts13_mse500   = _extract_full13_ts_per_member(daily_max_mse_star500)
+_ts13_barrier  = _extract_full13_ts_per_member(daily_max_barrier)
+
+# Z500 异常：逐成员减去气候态均值（延伸至全 13 天）
+_step_refo_all  = daily_max_z_refo_NCHN.step.values
+_refo_dates_all = pd.to_datetime([start_time + pd.Timedelta(sv) for sv in _step_refo_all])
+_refo_mask_full = (
+    (_refo_dates_all >= pd.Timestamp(start_time))
+    & (_refo_dates_all <= pd.Timestamp(study_end))
+)
+_refo_clim_13 = np.full(_FULL_DAYS, np.nan)
+if _refo_mask_full.any():
+    _refo_sel13 = daily_max_z_refo_NCHN.sel(step=_step_refo_all[_refo_mask_full])
+    _refo_mean13_vals = _refo_sel13.mean(
+        dim=[d for d in _refo_sel13.dims if d != "step"]
+    ).values.flatten()
+    for _j, _sv in enumerate(_step_refo_all[_refo_mask_full]):
+        _di = int(pd.Timedelta(_sv).days)
+        if 0 <= _di < _FULL_DAYS:
+            _refo_clim_13[_di] = _refo_mean13_vals[_j]
+_ts13_z500_anom = _ts13_z500_raw - _refo_clim_13[np.newaxis, :]
+
+# 第二类：NCVI、ISM、SST_Grad（重新提取为动态时间序列，沿空间维度平均，保留 step+number）
+_pv_init  = select_init_time(pv_region, start_time)
+_ism_init = select_init_time(ism_region, start_time)
+_swp_init = select_init_time(sst_wp, start_time)
+_sio_init = select_init_time(sst_io, start_time)
+
+_ts13_ncvi     = _extract_full13_ts_per_member(_pv_init.resample(step="D").mean())
+_ts13_ism_ts   = _extract_full13_ts_per_member(_ism_init.resample(step="D").mean())
+_ts13_sst_wp   = _extract_full13_ts_per_member(_swp_init.resample(step="D").mean())
+_ts13_sst_io   = _extract_full13_ts_per_member(_sio_init.resample(step="D").mean())
+_ts13_sst_grad = _ts13_sst_wp - _ts13_sst_io
+
+# 整理为有序字典（顺序与 FACTOR_COLS 一致）
+_factor_ts13 = {
+    "NCHN_tp":          _ts13_nchn_tp,
+    "sm_avg":           _ts13_sm,
+    "WNPSH":            _ts13_wnpsh,
+    "SSR_Avg":          _ts13_ssr,
+    "SHF_Avg":          _ts13_shf,
+    "z500_anom_NCHN":   _ts13_z500_anom,
+    "MSEstar_max_NCHN": _ts13_mse_max,
+    "MSEstar500_NCHN":  _ts13_mse500,
+    "Barrier_NCHN":     _ts13_barrier,
+    "NCVI":             _ts13_ncvi,
+    "ISM":              _ts13_ism_ts,
+    "SST_Grad":         _ts13_sst_grad,
+}
+
+# 两张图（3行×2列），每张绘制 6 个因子
+_out_factor_ts = {}
+for _grp_label, _grp_cols in [("A", FACTOR_COLS[:6]), ("B", FACTOR_COLS[6:])]:
+    fig_fts, axes_fts = plt.subplots(3, 2, figsize=(14, 12))
+    for _idx, _col in enumerate(_grp_cols):
+        _ax = axes_fts.flat[_idx]
+        _ts = _factor_ts13[_col]           # (n_members, 13)
+        _n_mem = _ts.shape[0]
+        # 集合成员细线（背景展布）
+        for _m in range(_n_mem):
+            _ax.plot(plot_dates_full, _ts[_m], color="lightsteelblue", alpha=0.2, lw=0.6)
+        # 集合均值粗线
+        _ax.plot(
+            plot_dates_full, np.nanmean(_ts, axis=0),
+            color="dodgerblue", lw=2.5, alpha=1.0,
+            marker="o", markersize=5, label="Ensemble Mean",
+        )
+        _ax.set_title(LABEL_MAP.get(_col, _col).replace("\n", " "), fontsize=13)
+        _ax.xaxis.set_major_formatter(mdates.DateFormatter("%m-%d"))
+        plt.setp(_ax.get_xticklabels(), rotation=30, ha="right")
+        _ax.legend(fontsize=9, loc="best")
+        _ax.grid(True, linestyle=":", alpha=0.6)
+    plt.suptitle(
+        f"S2S Ensemble Forecast: 12 Factors Time Series"
+        f" (2023-06-12 ~ 2023-06-24) [{_grp_label}]",
+        fontsize=13, y=1.01,
+    )
+    plt.tight_layout()
+    _out_f = f"{OUT_DIR}/1.s2s.fig_factor_ts_{_grp_label}_{start_date}.png"
+    plt.savefig(_out_f, dpi=300, bbox_inches="tight")
+    plt.show()
+    _out_factor_ts[_grp_label] = _out_f
+    print(f"因子时间序列图 [{_grp_label}] 已保存至: {_out_f}")
+
 swanlab.log({
     "combined_LMG": swanlab.Image(out_combined_lmg),
     "ts_LMG": swanlab.Image(out_ts),
     "corr_LMG": swanlab.Image(out_corr),
     "combined_RI": swanlab.Image(out_combined_ri),
     "ts_RI": swanlab.Image(out_ts_ri),
+    "factor_ts_A": swanlab.Image(_out_factor_ts["A"]),
+    "factor_ts_B": swanlab.Image(_out_factor_ts["B"]),
 })
 
 swanlab.finish()
