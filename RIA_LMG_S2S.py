@@ -1261,7 +1261,7 @@ print("\nLMG 相对重要性分析全部完成！")
 # =============================================================================
 
 YLABEL_MAP = {
-    "NCHN_tp":            "Precipitation (m)",
+    "NCHN_tp":            "Precipitation (mm)",
     "sm_avg":             "Soil Moisture ($m^3/m^3$)",
     "WNPSH":              "850hPa Geopotential Height (m)",
     "SSR_Avg":            "Net Shortwave Radiation ($W/m^2$)",
@@ -1353,11 +1353,11 @@ for _i, _s in enumerate(_refo_sel_steps):
         _ts11_z500_refo[_di] = _refo_sub_mean[_i]
 
 _cat1_members: Dict[str, np.ndarray] = {
-    "NCHN_tp":        _ts11_members(daily_max_NCHNtp),
+    "NCHN_tp":        _ts11_members(daily_max_NCHNtp) * 1000,
     "sm_avg":         _ts11_members(daily_max_sm),
     "WNPSH":          _ts11_members(daily_max_z_WNPSH),
-    "SSR_Avg":        _ts11_members(daily_mean_ssr),
-    "SHF_Avg":        _ts11_members(daily_mean_sshf),
+    "SSR_Avg":        _ts11_members(daily_mean_ssr.diff(dim="step") / 86400),   # J/m²→W/m² (Δ/day)
+    "SHF_Avg":        _ts11_members(daily_mean_sshf.diff(dim="step") / 86400),  # J/m²→W/m² (Δ/day)
     "z500_anom_NCHN": _ts11_members(daily_max_z_NCHN) - _ts11_z500_refo,
 }
 
@@ -1408,18 +1408,17 @@ def _plot_ts11_group(
         ax = axes_flat[_idx]
         _data = members_dict[_fac]           # (n_members, 13)
         _mean = _data.mean(axis=0)            # (13,)
-        for _m in range(_data.shape[0]):
-            ax.plot(
-                _full_plot_dates, _data[_m],
-                color="dodgerblue", lw=0.8, alpha=0.2,
-                label="Ensemble Members (ECMWF)" if _m == 0 else None,
-            )
         ax.plot(
             _full_plot_dates, _mean,
             color="dodgerblue", lw=2.5, alpha=1.0,
             marker="o", markersize=4, zorder=5,
             label="Ensemble Mean",
         )
+        _valid = _mean[~np.isnan(_mean)]
+        if len(_valid) > 0:
+            _spread = np.ptp(_valid) if np.ptp(_valid) > 0 else 1e-6
+            _margin = 0.1 * _spread
+            ax.set_ylim(_valid.min() - _margin, _valid.max() + _margin)
         ax.set_title(LABEL_MAP.get(_fac, _fac).replace("\n", " "), fontsize=11)
         ax.set_ylabel(YLABEL_MAP.get(_fac, ""), fontsize=9)
         ax.xaxis.set_major_formatter(mdates.DateFormatter("%m-%d"))
