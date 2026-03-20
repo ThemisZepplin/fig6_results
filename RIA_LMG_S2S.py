@@ -1257,74 +1257,184 @@ swanlab.finish()
 print("\nLMG 相对重要性分析全部完成！")
 
 # =============================================================================
-# 11. 前兆因子逐日时间序列图
+# 11. 前兆因子逐日时间序列图（面条图，6.12–6.24 共 13 天）
 # =============================================================================
-# 静态因子（初始 3 天均值，50 成员各为标量）—— 在时间轴上铺平为水平直线展示
-_STATIC_FACTORS = {
-    "NCVI", "ISM", "SST_Grad",
-    "MSEstar_max_NCHN", "MSEstar500_NCHN", "Barrier_NCHN",
+
+_N_FULL_11 = (study_end - start_time).days + 1           # 13 天
+_full_plot_dates = pd.date_range(start=start_time, end=study_end)
+
+
+def _ts11_members(da: xr.DataArray) -> np.ndarray:
+    """
+    从日重采样后的 xarray DataArray 提取 start_time ~ study_end 的
+    集合成员逐日时间序列，返回 (n_members, _N_FULL_11) 的 ndarray。
+
+    参数
+    ----
+    da : xr.DataArray
+        已完成日重采样（step 坐标为天整数倍 timedelta）的集合预报数组。
+        必须包含 ``step`` 坐标；可选含 ``number`` 维（集合成员）和任意空间维。
+        有效时刻由 ``start_time + step`` 推算。
+
+    返回
+    ----
+    ndarray, shape (n_members, _N_FULL_11)
+        各成员的逐日时间序列；start_time 对应列 0，study_end 对应列 12。
+        对于超出 ``da`` 步次范围的日期，对应列填充 NaN。
+        若 ``da`` 不含 ``number`` 维，则 n_members=1。
+
+    说明
+    ----
+    - 空间维度（非 ``step``、非 ``number`` 的所有维度）自动对齐求均值。
+    - step 到日索引的映射：day_idx = int(Timedelta(step).days)，
+      start_time 对应 day_idx=0，study_end 对应 day_idx=_N_FULL_11-1。
+    - 缺失日期（step 不在 da 中）保持 NaN，不进行前向填充。
+    """
+    step_arr = da.step.values
+    step_dates = np.array([start_time + pd.Timedelta(sv) for sv in step_arr])
+    in_range = np.array(
+        [start_time.date() <= pd.Timestamp(d).date() <= study_end.date()
+         for d in step_dates]
+    )
+    sel_steps = step_arr[in_range]
+    if len(sel_steps) == 0:
+        n_m = da.sizes.get("number", 1)
+        return np.full((n_m, _N_FULL_11), np.nan)
+    sub = da.sel(step=list(sel_steps))
+    sp_dims = [d for d in sub.dims if d not in ("step", "number")]
+    if sp_dims:
+        sub = sub.mean(dim=sp_dims)
+    if "number" in sub.dims and "step" in sub.dims:
+        sub = sub.transpose("number", "step")
+    vals = sub.values  # (n_members, n_sel)
+    if vals.ndim == 1:
+        vals = vals[np.newaxis, :]
+    n_m = vals.shape[0]
+    out = np.full((n_m, _N_FULL_11), np.nan)
+    for i, s in enumerate(sel_steps):
+        di = int(pd.Timedelta(s).days)   # start_time offset = 0
+        if 0 <= di < _N_FULL_11:
+            out[:, di] = vals[:, i]
+    return out
+
+
+# ── Category 1：动态因子（已重采样为日分辨率，直接提取 6.12–6.24）───────────
+
+# z500 异常需要先重新计算 13 天的 reforecast 参考均值
+_refo_step_arr   = daily_max_z_refo_NCHN.step.values
+_refo_step_dates = np.array([start_time + pd.Timedelta(sv) for sv in _refo_step_arr])
+_refo_in_range   = np.array(
+    [start_time.date() <= pd.Timestamp(d).date() <= study_end.date()
+     for d in _refo_step_dates]
+)
+_refo_sel_steps  = _refo_step_arr[_refo_in_range]
+_refo_sub        = daily_max_z_refo_NCHN.sel(step=list(_refo_sel_steps))
+_refo_mean_dims  = [d for d in _refo_sub.dims if d != "step"]
+_refo_sub_mean   = _refo_sub.mean(dim=_refo_mean_dims).values  # (n_sel,)
+_ts11_z500_refo  = np.full(_N_FULL_11, np.nan)
+for _i, _s in enumerate(_refo_sel_steps):
+    _di = int(pd.Timedelta(_s).days)
+    if 0 <= _di < _N_FULL_11:
+        _ts11_z500_refo[_di] = _refo_sub_mean[_i]
+
+_cat1_members: Dict[str, np.ndarray] = {
+    "NCHN_tp":        _ts11_members(daily_max_NCHNtp),
+    "sm_avg":         _ts11_members(daily_max_sm),
+    "WNPSH":          _ts11_members(daily_max_z_WNPSH),
+    "SSR_Avg":        _ts11_members(daily_mean_ssr),
+    "SHF_Avg":        _ts11_members(daily_mean_sshf),
+    "z500_anom_NCHN": _ts11_members(daily_max_z_NCHN) - _ts11_z500_refo,
 }
 
-# 每个因子的逐成员时间序列数据：shape (50, days_len)
-_factor_member_ts: Dict[str, np.ndarray] = {}
-for _factor in FACTOR_COLS:
-    if _factor in _STATIC_FACTORS:
-        # 静态因子：将每个成员的标量沿时间轴重复，得到 (50, days_len) 的水平矩阵
-        _scalar_arr = {
-            "NCVI": ncvi_arr,
-            "ISM": ism_arr,
-            "SST_Grad": sst_grad_arr,
-            "MSEstar_max_NCHN": MSEstar_max_NCHN_val,
-            "MSEstar500_NCHN": MSEstar500_NCHN_val,
-            "Barrier_NCHN": Barrier_NCHN_val,
-        }[_factor]
-        _factor_member_ts[_factor] = np.stack(
-            [np.repeat(_scalar_arr[m], days_len) for m in range(n_members)]
+# ── Category 2：初始强迫因子，重新提取动态时间序列（不取时间均值）───────────
+# pv_region / ism_region / sst_wp / sst_io 仍含 forecast_reference_time 维，
+# 先用 select_init_time 筛选起报时间，再重采样为日分辨率，最后提取集合成员序列。
+_pv_daily   = select_init_time(pv_region,  start_time).resample(step="D").mean()
+_ism_daily  = select_init_time(ism_region, start_time).resample(step="D").max()
+_swp_daily  = select_init_time(sst_wp,     start_time).resample(step="D").mean()
+_sio_daily  = select_init_time(sst_io,     start_time).resample(step="D").mean()
+
+_cat2_members: Dict[str, np.ndarray] = {
+    "NCVI":             _ts11_members(_pv_daily),
+    "ISM":              _ts11_members(_ism_daily),
+    "SST_Grad":         _ts11_members(_swp_daily) - _ts11_members(_sio_daily),
+    "MSEstar_max_NCHN": _ts11_members(daily_max_mse_star_max),
+    "MSEstar500_NCHN":  _ts11_members(daily_max_mse_star500),
+    "Barrier_NCHN":     _ts11_members(daily_max_barrier),
+}
+
+# ── 绘图函数（2 行 3 列，面条图）────────────────────────────────────────────
+
+
+def _plot_ts11_group(
+    members_dict: Dict[str, np.ndarray],
+    factors_in_group: List[str],
+    fig_title: str,
+    out_fname: str,
+) -> None:
+    """每组 6 个因子绘制 2×3 面条图并保存。
+
+    参数
+    ----
+    members_dict : Dict[str, np.ndarray]
+        键为因子名（须为 FACTOR_COLS 的子集），值为形状 (n_members, _N_FULL_11)
+        的集合成员逐日时间序列数组（n_members 通常为 50）。
+    factors_in_group : List[str]
+        本次绘图的因子名列表，长度须 ≤ 6（2×3 画布最多容纳 6 个子图）。
+        列表中的每个元素须同时作为 members_dict 的键存在。
+    fig_title : str
+        大图标题（使用 ``suptitle`` 置于所有子图上方）。
+    out_fname : str
+        输出 PNG 文件的完整路径。
+    """
+    fig, axes = plt.subplots(2, 3, figsize=(18, 10), sharex=False)
+    axes_flat = axes.flatten()
+    for _idx, _fac in enumerate(factors_in_group):
+        ax = axes_flat[_idx]
+        _data = members_dict[_fac]           # (n_members, 13)
+        _mean = _data.mean(axis=0)            # (13,)
+        for _m in range(_data.shape[0]):
+            ax.plot(
+                _full_plot_dates, _data[_m],
+                color="dodgerblue", lw=0.8, alpha=0.2,
+                label="Ensemble Members (ECMWF)" if _m == 0 else None,
+            )
+        ax.plot(
+            _full_plot_dates, _mean,
+            color="dodgerblue", lw=2.5, alpha=1.0,
+            marker="o", markersize=4, zorder=5,
+            label="Ensemble Mean",
         )
-    else:
-        # 动态因子：直接从 per_member_feature_arrays 取 (50, days_len) 数组
-        _factor_member_ts[_factor] = per_member_feature_arrays[_factor]
+        ax.set_title(LABEL_MAP.get(_fac, _fac).replace("\n", " "), fontsize=11)
+        ax.xaxis.set_major_formatter(mdates.DateFormatter("%m-%d"))
+        ax.tick_params(axis="x", rotation=45, labelsize=8)
+        ax.grid(True, linestyle=":", alpha=0.6)
+        ax.legend(fontsize=7, loc="upper right")
+    for _idx in range(len(factors_in_group), len(axes_flat)):
+        axes_flat[_idx].set_visible(False)
+    fig.suptitle(fig_title, fontsize=13, y=1.01)
+    plt.tight_layout()
+    plt.savefig(out_fname, dpi=150, bbox_inches="tight")
+    plt.show()
+    print(f"图已保存至: {out_fname}")
 
-# 绘图
-_plot_dates = pd.date_range(start=study_start, end=study_end)
-_nrows, _ncols = 4, 3
-fig_all_factors, axes_all = plt.subplots(
-    _nrows, _ncols, figsize=(20, 15), sharex=False
-)
-axes_all_flat = axes_all.flatten()
 
-for _idx, _factor in enumerate(FACTOR_COLS):
-    _ax = axes_all_flat[_idx]
-    _member_data = _factor_member_ts[_factor]          # (50, days_len)
-    _ensemble_mean = _member_data.mean(axis=0)          # (days_len,)
+_CAT1_FACTORS = ["NCHN_tp", "sm_avg", "WNPSH", "SSR_Avg", "SHF_Avg", "z500_anom_NCHN"]
+_CAT2_FACTORS = [
+    "NCVI", "ISM", "SST_Grad",
+    "MSEstar_max_NCHN", "MSEstar500_NCHN", "Barrier_NCHN",
+]
 
-    # 绘制 50 条成员预测线
-    for _m in range(n_members):
-        _ax.plot(
-            _plot_dates, _member_data[_m],
-            color="gray", lw=0.6, alpha=0.3,
-        )
-    # 绘制集合均值
-    _ax.plot(
-        _plot_dates, _ensemble_mean,
-        color="#1f4e79", lw=2.2, marker="o", markersize=4,
-        zorder=5, label="Ensemble Mean",
-    )
-    _ax.set_title(LABEL_MAP.get(_factor, _factor).replace("\n", " "), fontsize=11)
-    _ax.xaxis.set_major_formatter(mdates.DateFormatter("%m-%d"))
-    _ax.tick_params(axis="x", rotation=45, labelsize=8)
-    _ax.grid(True, linestyle=":", alpha=0.6)
-
-# 隐藏多余的空子图（FACTOR_COLS 为 12，4×3 恰好填满，无需隐藏）
-for _idx in range(len(FACTOR_COLS), len(axes_all_flat)):
-    axes_all_flat[_idx].set_visible(False)
-
-fig_all_factors.suptitle(
-    f"S2S Ensemble Forecast — All 12 Factor Time Series ({start_date})",
-    fontsize=14, y=1.01,
-)
-plt.tight_layout()
 out_all_factors = f"{OUT_DIR}/1.s2s.fig_ts_all_factors_{start_date}.png"
-plt.savefig(out_all_factors, dpi=150, bbox_inches="tight")
-plt.show()
-print(f"前兆因子时间序列图已保存至: {out_all_factors}")
+
+_plot_ts11_group(
+    _cat1_members, _CAT1_FACTORS,
+    f"S2S Ensemble — Dynamic Factors Time Series (6.12–6.24, {start_date})",
+    f"{OUT_DIR}/1.s2s.fig_ts_cat1_{start_date}.png",
+)
+_plot_ts11_group(
+    _cat2_members, _CAT2_FACTORS,
+    f"S2S Ensemble — Initial Forcing Factors Time Series (6.12–6.24, {start_date})",
+    out_all_factors,
+)
+print(f"全部前兆因子时间序列图已完成，主输出: {out_all_factors}")
