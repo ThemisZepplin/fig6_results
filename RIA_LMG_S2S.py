@@ -695,7 +695,7 @@ ism_ds = xr.open_dataset(
 )
 _validate_dataset(ism_ds, "tp (ISM rt)", skip_coverage_check=True)
 ism_region = ism_ds["tp"].sel(latitude=slice(25, 10), longitude=slice(70, 90))
-_ism_rt = select_init_time(ism_region, start_time).resample(step="D").mean()
+_ism_rt = select_init_time(ism_region, start_time).resample(step="D").max().diff(dim="step")  # 累计降水差分 → 逐日降水
 _ism_rt_spatial = _ism_rt.mean(
     dim=[d for d in _ism_rt.dims if d not in ("number", "step")]
 )  # (number, step_daily)
@@ -710,7 +710,7 @@ _validate_dataset(
     ism_hc_ds, "tp (ISM hc)", skip_init_check=True, skip_coverage_check=True
 )
 _ism_hc = ism_hc_ds["tp"].sel(latitude=slice(25, 10), longitude=slice(70, 90))
-_ism_hc_daily = _ism_hc.resample(step="D").mean()
+_ism_hc_daily = _ism_hc.resample(step="D").max().diff(dim="step")  # 累计降水差分 → 逐日降水
 _ism_hc_spatial = _ism_hc_daily.mean(
     dim=[d for d in _ism_hc_daily.dims if d not in (
         "forecast_reference_time", "time", "date", "valid_time", "number", "step"
@@ -1401,13 +1401,13 @@ print(f"Johnson 时间序列图已保存至: {out_ts_ri}")
 # =============================================================================
 print("\n生成 12 个因子时间序列图（6.12–6.24）...")
 
-_FULL_DAYS = (study_end - start_time).days + 1  # = 13
+_N_FULL_13 = (study_end - start_time).days + 1  # = 13
 plot_dates_full = pd.date_range(start=start_time, end=study_end)
 
 
 def _extract_full13_ts_per_member(daily_data):
     """从 start_time (6.12) 到 study_end (6.24) 提取每成员逐日序列。
-    返回 (n_members, _FULL_DAYS) 数组，缺失步次填 NaN。
+    返回 (n_members, _N_FULL_13) 数组，缺失步次填 NaN。
     day_idx = int(Timedelta(step).days) 直接作为 0-based 天数偏移。
     """
     step_vals = daily_data.step
@@ -1419,7 +1419,7 @@ def _extract_full13_ts_per_member(daily_data):
     ]
     if not avail_pairs:
         n_members = daily_data.sizes.get("number", 1)
-        return np.full((n_members, _FULL_DAYS), np.nan)
+        return np.full((n_members, _N_FULL_13), np.nan)
     avail_steps, _ = zip(*avail_pairs)
     selected = daily_data.sel(step=list(avail_steps))
     dims_to_mean = [d for d in selected.dims if d not in ("step", "number")]
@@ -1428,10 +1428,10 @@ def _extract_full13_ts_per_member(daily_data):
         result_sel = result_sel.transpose("number", "step")
     avail_values = result_sel.values  # (n_members, n_avail)
     n_members = avail_values.shape[0]
-    result = np.full((n_members, _FULL_DAYS), np.nan)
+    result = np.full((n_members, _N_FULL_13), np.nan)
     for _i, _sv in enumerate(avail_steps):
         _di = int(pd.Timedelta(_sv).days)
-        if 0 <= _di < _FULL_DAYS:
+        if 0 <= _di < _N_FULL_13:
             result[:, _di] = avail_values[:, _i]
     return result
 
@@ -1454,7 +1454,7 @@ _refo_mask_full = (
     (_refo_dates_all >= pd.Timestamp(start_time))
     & (_refo_dates_all <= pd.Timestamp(study_end))
 )
-_refo_clim_13 = np.full(_FULL_DAYS, np.nan)
+_refo_clim_13 = np.full(_N_FULL_13, np.nan)
 if _refo_mask_full.any():
     _refo_sel13 = daily_max_z_refo_NCHN.sel(step=_step_refo_all[_refo_mask_full])
     _refo_mean13_vals = _refo_sel13.mean(
@@ -1462,7 +1462,7 @@ if _refo_mask_full.any():
     ).values.flatten()
     for _j, _sv in enumerate(_step_refo_all[_refo_mask_full]):
         _di = int(pd.Timedelta(_sv).days)
-        if 0 <= _di < _FULL_DAYS:
+        if 0 <= _di < _N_FULL_13:
             _refo_clim_13[_di] = _refo_mean13_vals[_j]
 _ts13_z500_anom = _ts13_z500_raw - _refo_clim_13[np.newaxis, :]
 
