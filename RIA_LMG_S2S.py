@@ -1392,7 +1392,7 @@ YLABEL_MAP = {
     "SHF_Avg":            "Sensible Heat Flux ($W/m^2$)",
     "z500_anom_NCHN":     "Z500 Anomaly (m)",
     "NCVI":               "PV Anomaly (PVU)",
-    "ISM":                "Monsoon Precip Anomaly (m)",
+    "ISM":                "Monsoon Precip Anomaly (mm)",
     "SST_Grad":           "SST Gradient Anomaly (K)",
     "MSEstar_max_NCHN":   "Max $MSE^*$ ($J/kg$)",
     "MSEstar500_NCHN":    "$MSE^*_{500}$ ($J/kg$)",
