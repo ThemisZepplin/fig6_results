@@ -650,8 +650,9 @@ def _rt_anomaly_daily(
     """
     rt_sel = select_init_time(rt_raw, start_time)
     if resample_agg == "max":
-        rt_daily = rt_sel.resample(step="D").max()
-        hc_daily = hc_raw.resample(step="D").max()
+        # 增加 .diff(dim="step") 将累计降水转为逐日降水量
+        rt_daily = rt_sel.resample(step="D").max().diff(dim="step")
+        hc_daily = hc_raw.resample(step="D").max().diff(dim="step")
     else:
         rt_daily = rt_sel.resample(step="D").mean()
         hc_daily = hc_raw.resample(step="D").mean()
@@ -1398,14 +1399,14 @@ YLABEL_MAP = {
     "Barrier_NCHN":       "Energy Barrier ($J/kg$)",
 }
 
-_N_FULL_11 = (study_end - start_time).days + 1           # 13 天
+_N_FULL_13 = (study_end - start_time).days + 1           # 13 天
 _full_plot_dates = pd.date_range(start=start_time, end=study_end)
 
 
 def _ts11_members(da: xr.DataArray) -> np.ndarray:
     """
     从日重采样后的 xarray DataArray 提取 start_time ~ study_end 的
-    集合成员逐日时间序列，返回 (n_members, _N_FULL_11) 的 ndarray。
+    集合成员逐日时间序列，返回 (n_members, _N_FULL_13) 的 ndarray。
 
     参数
     ----
@@ -1416,7 +1417,7 @@ def _ts11_members(da: xr.DataArray) -> np.ndarray:
 
     返回
     ----
-    ndarray, shape (n_members, _N_FULL_11)
+    ndarray, shape (n_members, _N_FULL_13)
         各成员的逐日时间序列；start_time 对应列 0，study_end 对应列 12。
         对于超出 ``da`` 步次范围的日期，对应列填充 NaN。
         若 ``da`` 不含 ``number`` 维，则 n_members=1。
@@ -1425,7 +1426,7 @@ def _ts11_members(da: xr.DataArray) -> np.ndarray:
     ----
     - 空间维度（非 ``step``、非 ``number`` 的所有维度）自动对齐求均值。
     - step 到日索引的映射：day_idx = int(Timedelta(step).days)，
-      start_time 对应 day_idx=0，study_end 对应 day_idx=_N_FULL_11-1。
+      start_time 对应 day_idx=0，study_end 对应 day_idx=_N_FULL_13-1。
     - 缺失日期（step 不在 da 中）保持 NaN，不进行前向填充。
     """
     step_arr = da.step.values
@@ -1437,7 +1438,7 @@ def _ts11_members(da: xr.DataArray) -> np.ndarray:
     sel_steps = step_arr[in_range]
     if len(sel_steps) == 0:
         n_m = da.sizes.get("number", 1)
-        return np.full((n_m, _N_FULL_11), np.nan)
+        return np.full((n_m, _N_FULL_13), np.nan)
     sub = da.sel(step=list(sel_steps))
     sp_dims = [d for d in sub.dims if d not in ("step", "number")]
     if sp_dims:
@@ -1448,10 +1449,10 @@ def _ts11_members(da: xr.DataArray) -> np.ndarray:
     if vals.ndim == 1:
         vals = vals[np.newaxis, :]
     n_m = vals.shape[0]
-    out = np.full((n_m, _N_FULL_11), np.nan)
+    out = np.full((n_m, _N_FULL_13), np.nan)
     for i, s in enumerate(sel_steps):
         di = int(pd.Timedelta(s).days)   # start_time offset = 0
-        if 0 <= di < _N_FULL_11:
+        if 0 <= di < _N_FULL_13:
             out[:, di] = vals[:, i]
     return out
 
@@ -1469,10 +1470,10 @@ _refo_sel_steps  = _refo_step_arr[_refo_in_range]
 _refo_sub        = daily_max_z_refo_NCHN.sel(step=list(_refo_sel_steps))
 _refo_mean_dims  = [d for d in _refo_sub.dims if d != "step"]
 _refo_sub_mean   = _refo_sub.mean(dim=_refo_mean_dims).values  # (n_sel,)
-_ts11_z500_refo  = np.full(_N_FULL_11, np.nan)
+_ts11_z500_refo  = np.full(_N_FULL_13, np.nan)
 for _i, _s in enumerate(_refo_sel_steps):
     _di = int(pd.Timedelta(_s).days)
-    if 0 <= _di < _N_FULL_11:
+    if 0 <= _di < _N_FULL_13:
         _ts11_z500_refo[_di] = _refo_sub_mean[_i]
 
 _cat1_members: Dict[str, np.ndarray] = {
@@ -1512,7 +1513,7 @@ def _plot_ts11_group(
     参数
     ----
     members_dict : Dict[str, np.ndarray]
-        键为因子名（须为 FACTOR_COLS 的子集），值为形状 (n_members, _N_FULL_11)
+        键为因子名（须为 FACTOR_COLS 的子集），值为形状 (n_members, _N_FULL_13)
         的集合成员逐日时间序列数组（n_members 通常为 50）。
     factors_in_group : List[str]
         本次绘图的因子名列表，长度须 ≤ 6（2×3 画布最多容纳 6 个子图）。
