@@ -84,8 +84,8 @@ YLABEL_MAP = {
     "NCHN_tp":          "Precip (mm)",
     "sm_avg":           "Soil Moisture (mm)",
     "WNPSH":            "Geopotential (m²/s²)",
-    "SSR_Avg":          "SSR (W/m²)",
-    "SHF_Avg":          "SHF (W/m²)",
+    "SSR_Avg":          "SSR ($W/m^2$)",
+    "SHF_Avg":          "SHF ($W/m^2$)",
     "z500_anom_NCHN":   "Z500 Anomaly (m²/s²)",
     "MSEstar_max_NCHN": "MSE* (J/kg)",
     "MSEstar500_NCHN":  "MSE* (J/kg)",
@@ -1487,6 +1487,12 @@ _ts13_ncvi  = _extract_full13_ts_per_member(ncvi_anom_da)
 _ts13_ism   = _extract_full13_ts_per_member(ism_anom_da)
 _ts13_sst_grad = _extract_full13_ts_per_member(sst_grad_anom_da)
 
+# SSR 和 SSHF：累计量差分 ÷ 86400，转换为逐日平均热通量（W/m²）
+_ssr_daily_flux  = ssr.resample(step="D").max().diff(dim="step") / 86400
+_sshf_daily_flux = sshf.resample(step="D").max().diff(dim="step") / 86400
+_ts13_ssr = _extract_full13_ts_per_member(_ssr_daily_flux)
+_ts13_shf = _extract_full13_ts_per_member(_sshf_daily_flux)
+
 # 整理为有序字典（顺序与 FACTOR_COLS 一致）
 # 注意：_ts13_ncvi 乘以 1e6 将原始 SI 单位（~1e-6）转换为 PVU
 _factor_ts13 = {
@@ -1504,23 +1510,25 @@ _factor_ts13 = {
     "SST_Grad":         _ts13_sst_grad,
 }
 
-# 两张图（3行×2列），每张绘制 6 个因子
+# 两张图（2行×3列），每张绘制 6 个因子
 _out_factor_ts = {}
 for _grp_label, _grp_cols in [("A", FACTOR_COLS[:6]), ("B", FACTOR_COLS[6:])]:
-    fig_fts, axes_fts = plt.subplots(3, 2, figsize=(14, 12))
+    fig_fts, axes_fts = plt.subplots(2, 3, figsize=(18, 10))
     for _idx, _col in enumerate(_grp_cols):
         _ax = axes_fts.flat[_idx]
         _ts = _factor_ts13[_col]           # (n_members, 13)
-        _n_mem = _ts.shape[0]
-        # 集合成员细线（背景展布）
-        for _m in range(_n_mem):
-            _ax.plot(plot_dates_full, _ts[_m], color="lightsteelblue", alpha=0.2, lw=0.6)
-        # 集合均值粗线
+        # 仅绘制集合均值粗线
+        _mean_ts = np.nanmean(_ts, axis=0)
         _ax.plot(
-            plot_dates_full, np.nanmean(_ts, axis=0),
+            plot_dates_full, _mean_ts,
             color="dodgerblue", lw=2.5, alpha=1.0,
             marker="o", markersize=5, label="Ensemble Mean",
         )
+        # 自适应 Y 轴范围（均值线上下各浮动 10%）
+        _ymin = np.nanmin(_mean_ts)
+        _ymax = np.nanmax(_mean_ts)
+        _ypad = (_ymax - _ymin) * 0.1 if (_ymax - _ymin) > 0 else abs(_ymax) * 0.1 + 1e-6
+        _ax.set_ylim(_ymin - _ypad, _ymax + _ypad)
         _ax.set_title(LABEL_MAP.get(_col, _col).replace("\n", " "), fontsize=13)
         _ax.set_ylabel(YLABEL_MAP.get(_col, ""), fontsize=10)
         _ax.xaxis.set_major_formatter(mdates.DateFormatter("%m-%d"))
