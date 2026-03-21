@@ -695,7 +695,7 @@ _validate_dataset(
 _pv_hc_raw = _pv_hc_ds["pv"].sel(latitude=slice(50, 35), longitude=slice(115, 130))
 
 ncvi_anom_daily = _rt_anomaly_daily(_pv_rt_raw, _pv_hc_raw, resample_agg="mean")  # 逻辑 B
-ncvi_arr = _anomaly_first3_mean(ncvi_anom_daily)                                   # 逻辑 A
+ncvi_arr = _anomaly_first3_mean(ncvi_anom_daily) * 1e6                            # 逻辑 A, 转为 PVU
 
 # ── 因子二：前期印度夏季风降水异常（ISM）──────────────────────────────────────
 # 空间范围：[10°N–25°N, 70°E–90°E]
@@ -1385,14 +1385,14 @@ print("\nLMG 相对重要性分析全部完成！")
 # =============================================================================
 
 YLABEL_MAP = {
-    "NCHN_tp":            "Precipitation (mm)",        # NCHN_tp × 1000 → mm
-    "sm_avg":             "Soil Moisture ($m^3/m^3$)",
+    "NCHN_tp":            "Precipitation (mm)",
+    "sm_avg":             "Soil Moisture ($kg/m^2$)",
     "WNPSH":              "850hPa Geopotential Height (m)",
     "SSR_Avg":            "Net Shortwave Radiation ($W/m^2$)",
     "SHF_Avg":            "Sensible Heat Flux ($W/m^2$)",
     "z500_anom_NCHN":     "Z500 Anomaly (m)",
-    "NCVI":               "PV Anomaly (PVU)",
-    "ISM":                "Monsoon Precip Anomaly (m)",  # ISM tp anomaly kept in m (not × 1000)
+    "NCVI":               "Potential Vorticity (PVU)",
+    "ISM":                "Monsoon Precip Anomaly (m)",
     "SST_Grad":           "SST Gradient Anomaly (K)",
     "MSEstar_max_NCHN":   "Max $MSE^*$ ($J/kg$)",
     "MSEstar500_NCHN":    "$MSE^*_{500}$ ($J/kg$)",
@@ -1477,7 +1477,7 @@ for _i, _s in enumerate(_refo_sel_steps):
         _ts11_z500_refo[_di] = _refo_sub_mean[_i]
 
 _cat1_members: Dict[str, np.ndarray] = {
-    "NCHN_tp":        _ts11_members(daily_max_NCHNtp) * 1000,
+    "NCHN_tp":        _ts11_members(daily_max_NCHNtp),
     "sm_avg":         _ts11_members(daily_max_sm),
     "WNPSH":          _ts11_members(daily_max_z_WNPSH),
     "SSR_Avg":        _ts11_members(daily_mean_ssr.diff(dim="step") / 86400),   # J/m²→W/m² (Δ/day)
@@ -1491,7 +1491,7 @@ _cat1_members: Dict[str, np.ndarray] = {
 _sst_as_ts  = _ts11_members(sst_as_anom_daily)
 _sst_wnp_ts = _ts11_members(sst_wnp_anom_daily)
 _cat2_members: Dict[str, np.ndarray] = {
-    "NCVI":             _ts11_members(ncvi_anom_daily),
+    "NCVI":             _ts11_members(ncvi_anom_daily) * 1e6,
     "ISM":              _ts11_members(ism_anom_daily),
     "SST_Grad":         _sst_as_ts - _sst_wnp_ts,
     "MSEstar_max_NCHN": _ts11_members(daily_max_mse_star_max),
