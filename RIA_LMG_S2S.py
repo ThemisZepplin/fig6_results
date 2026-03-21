@@ -1391,7 +1391,7 @@ YLABEL_MAP = {
     "SSR_Avg":            "Net Shortwave Radiation ($W/m^2$)",
     "SHF_Avg":            "Sensible Heat Flux ($W/m^2$)",
     "z500_anom_NCHN":     "Z500 Anomaly (m)",
-    "NCVI":               "Potential Vorticity (PVU)",
+    "NCVI":               "PV Anomaly (PVU)",
     "ISM":                "Monsoon Precip Anomaly (m)",
     "SST_Grad":           "SST Gradient Anomaly (K)",
     "MSEstar_max_NCHN":   "Max $MSE^*$ ($J/kg$)",
