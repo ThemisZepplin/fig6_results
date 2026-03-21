@@ -584,9 +584,13 @@ daily_max_mse_star_max = mse_star_max_da.resample(step="D").max()   # J/kg, dail
 daily_max_barrier = daily_max_mse_star_max - mse_s_daily.resample(step="D").mean()  # J/kg
 
 # =============================================================================
-# 2. 加载 S2S 前兆因子（起报后初始3天平均）
+# 2. 加载 S2S 前兆因子（异常值模式：V' = V_rt - V̄_hc）
 # =============================================================================
-print("正在加载 S2S 前兆因子数据 (初始3天平均)...")
+# 对 NCVI、ISM、SST_Grad 三个前兆因子实施异常值计算范式，消除 S2S 模式系统性漂移。
+# 双轨时间提取：
+#   Logic A（OLS/相对重要性/散点图）：初始前 3 天均值 → 每成员一个标量
+#   Logic B（逐日时间序列图）       ：全 13 天逐日序列 → 每成员 13 步数组
+print("正在加载 S2S 前兆因子数据（模式漂移校正：实时预报 - 历史回报气候态）...")
 dir_s2s_antecedent = "/data1/huangy/fig6/NC/MSE/"
 
 
@@ -607,30 +611,177 @@ def extract_first_3day_mean(data_array: xr.DataArray) -> np.ndarray:
     return data_array.mean(dim=dims_to_mean).values.flatten()
 
 
-# NCVI（华北冷涡 PV）
-pv_ds = xr.open_dataset(f"{dir_s2s_antecedent}ecmf_pf_60_2023-06.grib", engine="cfgrib")
-_validate_dataset(pv_ds, "pv (NCVI)", skip_coverage_check=True)
-pv_region = pv_ds["pv"].sel(latitude=slice(43, 36), longitude=slice(113, 122))
-ncvi_arr = extract_first_3day_mean(pv_region)
+def _hindcast_clim(hc_da: xr.DataArray) -> xr.DataArray:
+    """沿年份维（forecast_reference_time/time）和成员维（number）求均值，构建气候态背景场。
 
-# ISM（印度夏季风降水）
+    返回仅含 step（可能还有 lat/lon）维的气候态 DataArray。
+    """
+    mean_dims = [
+        d for d in hc_da.dims
+        if d in ("forecast_reference_time", "time", "date", "valid_time", "number")
+    ]
+    return hc_da.mean(dim=mean_dims) if mean_dims else hc_da
+
+
+def _anomaly_daily(
+    rt_da: xr.DataArray,
+    hc_clim_da: xr.DataArray,
+) -> xr.DataArray:
+    """对齐 step 坐标后计算 rt - hc_clim 异常值，保留 number 维（集合成员）。"""
+    common_steps = np.intersect1d(rt_da.step.values, hc_clim_da.step.values)
+    if len(common_steps) == 0:
+        warnings.warn(
+            "_anomaly_daily: rt 与 hc_clim 无公共 step 坐标，返回全 NaN 异常值",
+            UserWarning,
+            stacklevel=2,
+        )
+        return rt_da * np.nan
+    return rt_da.sel(step=common_steps) - hc_clim_da.sel(step=common_steps)
+
+
+def _extract_3day_mean_anom(anom_da: xr.DataArray) -> np.ndarray:
+    """取异常 DataArray 前 3 个日步均值（Logic A），每成员返回一个标量。
+
+    anom_da 应已完成空间平均，dims 为 (number, step)，step 为日尺度 timedelta。
+    """
+    da = anom_da.isel(step=slice(0, 3))
+    dims_to_mean = [d for d in da.dims if d != "number"]
+    return da.mean(dim=dims_to_mean).values.flatten()
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# 因子一：华北冷涡 PV 异常（NCVI）
+# 空间范围：[35°N–50°N, 115°E–130°E]（纬度降序 GRIB → slice(50, 35)）
+# ═══════════════════════════════════════════════════════════════════════
+pv_ds = xr.open_dataset(f"{dir_s2s_antecedent}ecmf_pf_60_2023-06.grib", engine="cfgrib")
+_validate_dataset(pv_ds, "pv (NCVI rt)", skip_coverage_check=True)
+pv_region = pv_ds["pv"].sel(latitude=slice(50, 35), longitude=slice(115, 130))
+_pv_rt = select_init_time(pv_region, start_time).resample(step="D").mean()
+_pv_rt_spatial = _pv_rt.mean(
+    dim=[d for d in _pv_rt.dims if d not in ("number", "step")]
+)  # (number, step_daily)
+
+# 文件含 2003-2022 年（20年）多年历史回报数据，按同一起报日（6月12日）和相同预报步长归档。
+# 若修改 start_date，需同步更新文件路径（路径中的 "2023-06-12" 对应起报日期）。
+ncvi_hc_ds = xr.open_dataset(
+    "/data1/huangy/fig6/NC/MSE/Antecedent/ecmf_pf_NCVI_2023-06-12.grib",
+    engine="cfgrib",
+)
+_validate_dataset(
+    ncvi_hc_ds, "pv (NCVI hc)", skip_init_check=True, skip_coverage_check=True
+)
+_pv_hc = ncvi_hc_ds["pv"].sel(latitude=slice(50, 35), longitude=slice(115, 130))
+_pv_hc_daily = _pv_hc.resample(step="D").mean()
+_pv_hc_spatial = _pv_hc_daily.mean(
+    dim=[d for d in _pv_hc_daily.dims if d not in (
+        "forecast_reference_time", "time", "date", "valid_time", "number", "step"
+    )]
+)  # spatial-avg: (year/number, step)
+ncvi_hc_clim = _hindcast_clim(_pv_hc_spatial)  # (step,)
+
+# Logic B DataArray（number, step_daily）：供逐日时间序列图使用
+ncvi_anom_da = _anomaly_daily(_pv_rt_spatial, ncvi_hc_clim)
+# Logic A 标量数组（供 OLS + 相对重要性分析）
+ncvi_arr = _extract_3day_mean_anom(ncvi_anom_da)
+
+# ═══════════════════════════════════════════════════════════════════════
+# 因子二：印度夏季风降水异常（ISM）
+# 空间范围：[10°N–25°N, 70°E–90°E]（纬度降序 → slice(25, 10)）
+# ═══════════════════════════════════════════════════════════════════════
 ism_ds = xr.open_dataset(
     f"{dir_s2s_antecedent}ecmf_pf_228228_2023-06.grib",
     engine="cfgrib",
-    backend_kwargs={"errors": "ignore"},  # 跳过文件末尾损坏的 GRIB 消息，不打印回溯
+    backend_kwargs={"errors": "ignore"},  # 跳过文件末尾损坏的 GRIB 消息
 )
-_validate_dataset(ism_ds, "tp (ISM)", skip_coverage_check=True)
-ism_region = ism_ds["tp"].sel(latitude=slice(25, 5), longitude=slice(65, 85))
-ism_arr = extract_first_3day_mean(ism_region)
+_validate_dataset(ism_ds, "tp (ISM rt)", skip_coverage_check=True)
+ism_region = ism_ds["tp"].sel(latitude=slice(25, 10), longitude=slice(70, 90))
+_ism_rt = select_init_time(ism_region, start_time).resample(step="D").mean()
+_ism_rt_spatial = _ism_rt.mean(
+    dim=[d for d in _ism_rt.dims if d not in ("number", "step")]
+)  # (number, step_daily)
 
-# SST Gradient（印太暖池海温梯度）
+# 文件含 2003-2022 年多年历史回报数据（同一起报日 6月12日）。
+ism_hc_ds = xr.open_dataset(
+    "/data1/huangy/fig6/NC/MSE/Surface/ecmf_pf_ISM_NCHN_2023-06-12.grib",
+    engine="cfgrib",
+    backend_kwargs={"errors": "ignore"},
+)
+_validate_dataset(
+    ism_hc_ds, "tp (ISM hc)", skip_init_check=True, skip_coverage_check=True
+)
+_ism_hc = ism_hc_ds["tp"].sel(latitude=slice(25, 10), longitude=slice(70, 90))
+_ism_hc_daily = _ism_hc.resample(step="D").mean()
+_ism_hc_spatial = _ism_hc_daily.mean(
+    dim=[d for d in _ism_hc_daily.dims if d not in (
+        "forecast_reference_time", "time", "date", "valid_time", "number", "step"
+    )]
+)
+ism_hc_clim = _hindcast_clim(_ism_hc_spatial)  # (step,)
+
+ism_anom_da = _anomaly_daily(_ism_rt_spatial, ism_hc_clim)
+ism_arr = _extract_3day_mean_anom(ism_anom_da)
+
+# ═══════════════════════════════════════════════════════════════════════
+# 因子三：印太暖池纬向海温梯度异常（SST_Grad = SSTA_AS - SSTA_WNP）
+# 阿拉伯海 AS ：[5°N–25°N,  50°E– 90°E]（纬度降序 → slice(25,  5)）
+# 西北太平洋 WNP：[5°N–25°N, 120°E–150°E]（纬度降序 → slice(25,  5)）
+# ═══════════════════════════════════════════════════════════════════════
 sst_ds = xr.open_dataset(
     f"{dir_s2s_antecedent}ecmf_pf_34_2023-06.grib", engine="cfgrib"
 )
-_validate_dataset(sst_ds, "sst (SST_Grad)", skip_coverage_check=True)
-sst_wp = sst_ds["sst"].sel(latitude=slice(15, 0), longitude=slice(125, 145))
-sst_io = sst_ds["sst"].sel(latitude=slice(10, -10), longitude=slice(60, 80))
-sst_grad_arr = extract_first_3day_mean(sst_wp) - extract_first_3day_mean(sst_io)
+_validate_dataset(sst_ds, "sst (SST rt)", skip_coverage_check=True)
+sst_as  = sst_ds["sst"].sel(latitude=slice(25, 5),   longitude=slice(50, 90))
+sst_wnp = sst_ds["sst"].sel(latitude=slice(25, 5),   longitude=slice(120, 150))
+# 保留 sst_wp / sst_io 别名以兼容后续可能的引用
+sst_wp = sst_wnp
+sst_io = sst_as
+
+_sst_as_rt  = select_init_time(sst_as,  start_time).resample(step="D").mean()
+_sst_wnp_rt = select_init_time(sst_wnp, start_time).resample(step="D").mean()
+_sst_as_rt_spatial  = _sst_as_rt.mean(
+    dim=[d for d in _sst_as_rt.dims  if d not in ("number", "step")]
+)
+_sst_wnp_rt_spatial = _sst_wnp_rt.mean(
+    dim=[d for d in _sst_wnp_rt.dims if d not in ("number", "step")]
+)
+
+# 文件含 2003-2022 年多年历史回报（AS 阿拉伯海区域，同一起报日 6月12日）。
+sst_as_hc_ds = xr.open_dataset(
+    "/data1/huangy/fig6/NC/MSE/SST/ecmf_pf_34_AS_2023-06-12.grib", engine="cfgrib"
+)
+_validate_dataset(
+    sst_as_hc_ds, "sst (SST AS hc)", skip_init_check=True, skip_coverage_check=True
+)
+_sst_as_hc = sst_as_hc_ds["sst"].sel(latitude=slice(25, 5), longitude=slice(50, 90))
+_sst_as_hc_daily = _sst_as_hc.resample(step="D").mean()
+_sst_as_hc_spatial = _sst_as_hc_daily.mean(
+    dim=[d for d in _sst_as_hc_daily.dims if d not in (
+        "forecast_reference_time", "time", "date", "valid_time", "number", "step"
+    )]
+)
+sst_as_hc_clim = _hindcast_clim(_sst_as_hc_spatial)  # (step,)
+
+# 文件含 2003-2022 年多年历史回报（WNP 西北太平洋区域，同一起报日 6月12日）。
+sst_wnp_hc_ds = xr.open_dataset(
+    "/data1/huangy/fig6/NC/MSE/SST/ecmf_pf_34_WNP_2023-06-12.grib", engine="cfgrib"
+)
+_validate_dataset(
+    sst_wnp_hc_ds, "sst (SST WNP hc)", skip_init_check=True, skip_coverage_check=True
+)
+_sst_wnp_hc = sst_wnp_hc_ds["sst"].sel(latitude=slice(25, 5), longitude=slice(120, 150))
+_sst_wnp_hc_daily = _sst_wnp_hc.resample(step="D").mean()
+_sst_wnp_hc_spatial = _sst_wnp_hc_daily.mean(
+    dim=[d for d in _sst_wnp_hc_daily.dims if d not in (
+        "forecast_reference_time", "time", "date", "valid_time", "number", "step"
+    )]
+)
+sst_wnp_hc_clim = _hindcast_clim(_sst_wnp_hc_spatial)  # (step,)
+
+# 先各自求异常，再差分构建梯度（SSTA_AS - SSTA_WNP）
+sst_as_anom_da  = _anomaly_daily(_sst_as_rt_spatial,  sst_as_hc_clim)
+sst_wnp_anom_da = _anomaly_daily(_sst_wnp_rt_spatial, sst_wnp_hc_clim)
+sst_grad_anom_da = sst_as_anom_da - sst_wnp_anom_da
+sst_grad_arr = _extract_3day_mean_anom(sst_grad_anom_da)
 
 # =============================================================================
 # 3. ERA5 观测基准数据
@@ -1315,17 +1466,10 @@ if _refo_mask_full.any():
             _refo_clim_13[_di] = _refo_mean13_vals[_j]
 _ts13_z500_anom = _ts13_z500_raw - _refo_clim_13[np.newaxis, :]
 
-# 第二类：NCVI、ISM、SST_Grad（重新提取为动态时间序列，沿空间维度平均，保留 step+number）
-_pv_init  = select_init_time(pv_region, start_time)
-_ism_init = select_init_time(ism_region, start_time)
-_swp_init = select_init_time(sst_wp, start_time)
-_sio_init = select_init_time(sst_io, start_time)
-
-_ts13_ncvi     = _extract_full13_ts_per_member(_pv_init.resample(step="D").mean())
-_ts13_ism_ts   = _extract_full13_ts_per_member(_ism_init.resample(step="D").mean())
-_ts13_sst_wp   = _extract_full13_ts_per_member(_swp_init.resample(step="D").mean())
-_ts13_sst_io   = _extract_full13_ts_per_member(_sio_init.resample(step="D").mean())
-_ts13_sst_grad = _ts13_sst_wp - _ts13_sst_io
+# 第二类：NCVI、ISM、SST_Grad（直接使用 Section 2 计算的逐日异常 DataArray，Logic B）
+_ts13_ncvi  = _extract_full13_ts_per_member(ncvi_anom_da)
+_ts13_ism   = _extract_full13_ts_per_member(ism_anom_da)
+_ts13_sst_grad = _extract_full13_ts_per_member(sst_grad_anom_da)
 
 # 整理为有序字典（顺序与 FACTOR_COLS 一致）
 _factor_ts13 = {
@@ -1339,7 +1483,7 @@ _factor_ts13 = {
     "MSEstar500_NCHN":  _ts13_mse500,
     "Barrier_NCHN":     _ts13_barrier,
     "NCVI":             _ts13_ncvi,
-    "ISM":              _ts13_ism_ts,
+    "ISM":              _ts13_ism,
     "SST_Grad":         _ts13_sst_grad,
 }
 
