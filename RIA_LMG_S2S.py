@@ -584,9 +584,9 @@ daily_max_mse_star_max = mse_star_max_da.resample(step="D").max()   # J/kg, dail
 daily_max_barrier = daily_max_mse_star_max - mse_s_daily.resample(step="D").mean()  # J/kg
 
 # =============================================================================
-# 2. 加载 S2S 前兆因子（起报后初始3天平均）
+# 2. 加载 S2S 前兆因子（起报后初始3天平均 + 13天逐日序列异常值）
 # =============================================================================
-print("正在加载 S2S 前兆因子数据 (初始3天平均)...")
+print("正在加载 S2S 前兆因子数据 (NCVI / ISM / SST_Grad 异常值)...")
 dir_s2s_antecedent = "/data1/huangy/fig6/NC/MSE/"
 
 
@@ -607,30 +607,153 @@ def extract_first_3day_mean(data_array: xr.DataArray) -> np.ndarray:
     return data_array.mean(dim=dims_to_mean).values.flatten()
 
 
-# NCVI（华北冷涡 PV）
-pv_ds = xr.open_dataset(f"{dir_s2s_antecedent}ecmf_pf_60_2023-06.grib", engine="cfgrib")
-_validate_dataset(pv_ds, "pv (NCVI)", skip_coverage_check=True)
-pv_region = pv_ds["pv"].sel(latitude=slice(43, 36), longitude=slice(113, 122))
-ncvi_arr = extract_first_3day_mean(pv_region)
+def _build_hc_clim(hc_daily: xr.DataArray) -> xr.DataArray:
+    """沿年份维（及 number 维）求均值，构建逐 step 气候态背景场。
 
-# ISM（印度夏季风降水）
-ism_ds = xr.open_dataset(
+    保留 step、latitude、longitude 维度，其余维度（forecast_reference_time、
+    number 等）均取均值消去，最终返回形如 (step, [lat, lon]) 的 DataArray。
+    仅对实际存在于 hc_daily 中的维度执行均值操作。
+    """
+    drop_dims = [
+        d for d in hc_daily.dims
+        if d not in ("step", "latitude", "longitude")
+    ]
+    if not drop_dims:
+        return hc_daily
+    return hc_daily.mean(dim=drop_dims)
+
+
+def _rt_anomaly_daily(
+    rt_raw: xr.DataArray,
+    hc_raw: xr.DataArray,
+    resample_agg: str = "mean",
+) -> xr.DataArray:
+    """构建逐日异常值 DataArray（逻辑 B），保留 RT 的 number 和 step 维度。
+
+    流程
+    ----
+    1. 用 select_init_time 从月度 RT 文件中筛选 start_time 起报时间；
+    2. 对 RT 和 HC 分别做日重采样（resample_agg: 'mean' 或 'max'）；
+    3. 对 HC 沿所有非 step/空间维（forecast_reference_time、number 等）求均值，
+       构建仅含 (step, [lat, lon]) 的气候态背景场；
+    4. 将 HC 气候态的 step 坐标对齐到 RT（缺失步次填 NaN），再相减得异常值。
+
+    参数
+    ----
+    resample_agg : {'mean', 'max'}
+        日重采样聚合方式，默认 'mean'；其他值同样回退到 'mean'（已有的合理默认行为）。
+
+    返回
+    ----
+    DataArray，维度为 (number, step, [latitude, longitude])，
+    step 坐标与 RT 日重采样后一致。
+    """
+    rt_sel = select_init_time(rt_raw, start_time)
+    if resample_agg == "max":
+        rt_daily = rt_sel.resample(step="D").max()
+        hc_daily = hc_raw.resample(step="D").max()
+    else:
+        rt_daily = rt_sel.resample(step="D").mean()
+        hc_daily = hc_raw.resample(step="D").mean()
+    hc_clim = _build_hc_clim(hc_daily)  # (step, [lat, lon])
+    # 仅重建 step 维对齐（lat/lon 由 .sel() 已保证同网格）；缺失步次填 NaN
+    if "step" in hc_clim.dims:
+        hc_clim = hc_clim.reindex(step=rt_daily.step.values)
+    return rt_daily - hc_clim
+
+
+def _anomaly_first3_mean(anom_daily: xr.DataArray) -> np.ndarray:
+    """逻辑 A：从逐日异常值 DataArray 中提取初始 3 天均值。
+
+    返回形状 (n_members,) 的 ndarray，保留集合成员维度。
+    """
+    if "step" in anom_daily.dims:
+        anom_3d = anom_daily.isel(step=slice(0, 3))
+    else:
+        anom_3d = anom_daily
+    dims_to_mean = [d for d in anom_3d.dims if d != "number"]
+    return anom_3d.mean(dim=dims_to_mean).values.flatten()
+
+
+# ── 因子一：华北冷涡 PV 异常（NCVI）─────────────────────────────────────────
+# 空间范围：[35°N–50°N, 115°E–130°E]
+# RT: ecmf_pf_60_2023-06.grib (PV, param 60)
+# HC: Antecedent/ecmf_pf_NCVI_2023-06-12.grib（2003–2022 再预报，多年均值构建气候态）
+_pv_rt_ds = xr.open_dataset(
+    f"{dir_s2s_antecedent}ecmf_pf_60_2023-06.grib", engine="cfgrib"
+)
+_validate_dataset(_pv_rt_ds, "pv (NCVI RT)", skip_coverage_check=True)
+_pv_rt_raw = _pv_rt_ds["pv"].sel(latitude=slice(50, 35), longitude=slice(115, 130))
+
+_pv_hc_ds = xr.open_dataset(
+    f"{dir_s2s_antecedent}Antecedent/ecmf_pf_NCVI_2023-06-12.grib", engine="cfgrib"
+)
+_validate_dataset(
+    _pv_hc_ds, "pv (NCVI HC)", skip_init_check=True, skip_coverage_check=True
+)
+_pv_hc_raw = _pv_hc_ds["pv"].sel(latitude=slice(50, 35), longitude=slice(115, 130))
+
+ncvi_anom_daily = _rt_anomaly_daily(_pv_rt_raw, _pv_hc_raw, resample_agg="mean")  # 逻辑 B
+ncvi_arr = _anomaly_first3_mean(ncvi_anom_daily)                                   # 逻辑 A
+
+# ── 因子二：前期印度夏季风降水异常（ISM）──────────────────────────────────────
+# 空间范围：[10°N–25°N, 70°E–90°E]
+# RT: ecmf_pf_228228_2023-06.grib (TP, param 228228)
+# HC: Surface/ecmf_pf_ISM_NCHN_2023-06-12.grib
+_ism_rt_ds = xr.open_dataset(
     f"{dir_s2s_antecedent}ecmf_pf_228228_2023-06.grib",
     engine="cfgrib",
     backend_kwargs={"errors": "ignore"},  # 跳过文件末尾损坏的 GRIB 消息，不打印回溯
 )
-_validate_dataset(ism_ds, "tp (ISM)", skip_coverage_check=True)
-ism_region = ism_ds["tp"].sel(latitude=slice(25, 5), longitude=slice(65, 85))
-ism_arr = extract_first_3day_mean(ism_region)
+_validate_dataset(_ism_rt_ds, "tp (ISM RT)", skip_coverage_check=True)
+_ism_rt_raw = _ism_rt_ds["tp"].sel(latitude=slice(25, 10), longitude=slice(70, 90))
 
-# SST Gradient（印太暖池海温梯度）
-sst_ds = xr.open_dataset(
+_ism_hc_ds = xr.open_dataset(
+    f"{dir_s2s_antecedent}Surface/ecmf_pf_ISM_NCHN_2023-06-12.grib", engine="cfgrib"
+)
+_validate_dataset(
+    _ism_hc_ds, "tp (ISM HC)", skip_init_check=True, skip_coverage_check=True
+)
+_ism_hc_raw = _ism_hc_ds["tp"].sel(latitude=slice(25, 10), longitude=slice(70, 90))
+
+ism_anom_daily = _rt_anomaly_daily(_ism_rt_raw, _ism_hc_raw, resample_agg="max")   # 逻辑 B
+ism_arr = _anomaly_first3_mean(ism_anom_daily)                                      # 逻辑 A
+
+# ── 因子三：印太暖池纬向海温梯度异常（SST_Grad）──────────────────────────────
+# AS  [5°N–25°N, 50°E–90°E]；WNP [5°N–25°N, 120°E–150°E]
+# RT: ecmf_pf_34_2023-06.grib (SST, param 34)
+# HC: SST/ecmf_pf_34_AS_2023-06-12.grib / ecmf_pf_34_WNP_2023-06-12.grib
+# 必须先分别求两个海区的异常，再作差构建梯度（∇SSTA = SSTA_AS − SSTA_WNP）
+_sst_rt_ds = xr.open_dataset(
     f"{dir_s2s_antecedent}ecmf_pf_34_2023-06.grib", engine="cfgrib"
 )
-_validate_dataset(sst_ds, "sst (SST_Grad)", skip_coverage_check=True)
-sst_wp = sst_ds["sst"].sel(latitude=slice(15, 0), longitude=slice(125, 145))
-sst_io = sst_ds["sst"].sel(latitude=slice(10, -10), longitude=slice(60, 80))
-sst_grad_arr = extract_first_3day_mean(sst_wp) - extract_first_3day_mean(sst_io)
+_validate_dataset(_sst_rt_ds, "sst (SST_Grad RT)", skip_coverage_check=True)
+_sst_rt_as_raw  = _sst_rt_ds["sst"].sel(latitude=slice(25, 5),  longitude=slice(50,  90))
+_sst_rt_wnp_raw = _sst_rt_ds["sst"].sel(latitude=slice(25, 5),  longitude=slice(120, 150))
+
+_sst_hc_as_ds = xr.open_dataset(
+    f"{dir_s2s_antecedent}SST/ecmf_pf_34_AS_2023-06-12.grib", engine="cfgrib"
+)
+_validate_dataset(
+    _sst_hc_as_ds, "sst AS (HC)", skip_init_check=True, skip_coverage_check=True
+)
+_sst_hc_as_raw = _sst_hc_as_ds["sst"].sel(latitude=slice(25, 5), longitude=slice(50, 90))
+
+_sst_hc_wnp_ds = xr.open_dataset(
+    f"{dir_s2s_antecedent}SST/ecmf_pf_34_WNP_2023-06-12.grib", engine="cfgrib"
+)
+_validate_dataset(
+    _sst_hc_wnp_ds, "sst WNP (HC)", skip_init_check=True, skip_coverage_check=True
+)
+_sst_hc_wnp_raw = _sst_hc_wnp_ds["sst"].sel(latitude=slice(25, 5), longitude=slice(120, 150))
+
+# 逻辑 B：分别构建 AS / WNP 逐日异常（先算各区域异常，再求梯度差）
+sst_as_anom_daily  = _rt_anomaly_daily(_sst_rt_as_raw,  _sst_hc_as_raw,  resample_agg="mean")
+sst_wnp_anom_daily = _rt_anomaly_daily(_sst_rt_wnp_raw, _sst_hc_wnp_raw, resample_agg="mean")
+# 逻辑 A：初始3天均值异常梯度 = SSTA_AS − SSTA_WNP
+sst_grad_arr = (
+    _anomaly_first3_mean(sst_as_anom_daily) - _anomaly_first3_mean(sst_wnp_anom_daily)
+)
 
 # =============================================================================
 # 3. ERA5 观测基准数据
@@ -1261,15 +1384,15 @@ print("\nLMG 相对重要性分析全部完成！")
 # =============================================================================
 
 YLABEL_MAP = {
-    "NCHN_tp":            "Precipitation (mm)",
+    "NCHN_tp":            "Precipitation (mm)",        # NCHN_tp × 1000 → mm
     "sm_avg":             "Soil Moisture ($m^3/m^3$)",
     "WNPSH":              "850hPa Geopotential Height (m)",
     "SSR_Avg":            "Net Shortwave Radiation ($W/m^2$)",
     "SHF_Avg":            "Sensible Heat Flux ($W/m^2$)",
     "z500_anom_NCHN":     "Z500 Anomaly (m)",
-    "NCVI":               "Potential Vorticity (PVU)",
-    "ISM":                "Monsoon Precip (m)",
-    "SST_Grad":           "SST Gradient (K)",
+    "NCVI":               "PV Anomaly (PVU)",
+    "ISM":                "Monsoon Precip Anomaly (m)",  # ISM tp anomaly kept in m (not × 1000)
+    "SST_Grad":           "SST Gradient Anomaly (K)",
     "MSEstar_max_NCHN":   "Max $MSE^*$ ($J/kg$)",
     "MSEstar500_NCHN":    "$MSE^*_{500}$ ($J/kg$)",
     "Barrier_NCHN":       "Energy Barrier ($J/kg$)",
@@ -1361,18 +1484,15 @@ _cat1_members: Dict[str, np.ndarray] = {
     "z500_anom_NCHN": _ts11_members(daily_max_z_NCHN) - _ts11_z500_refo,
 }
 
-# ── Category 2：初始强迫因子，重新提取动态时间序列（不取时间均值）───────────
-# pv_region / ism_region / sst_wp / sst_io 仍含 forecast_reference_time 维，
-# 先用 select_init_time 筛选起报时间，再重采样为日分辨率，最后提取集合成员序列。
-_pv_daily   = select_init_time(pv_region,  start_time).resample(step="D").mean()
-_ism_daily  = select_init_time(ism_region, start_time).resample(step="D").max()
-_swp_daily  = select_init_time(sst_wp,     start_time).resample(step="D").mean()
-_sio_daily  = select_init_time(sst_io,     start_time).resample(step="D").mean()
-
+# ── Category 2：初始强迫因子（逻辑 B：逐日异常时间序列）──────────────────────
+# NCVI / ISM / SST_Grad 直接使用第 2 节构建的逐日异常 DataArray，
+# 传入 _ts11_members 提取 start_time–study_end 的集合成员时间序列。
+_sst_as_ts  = _ts11_members(sst_as_anom_daily)
+_sst_wnp_ts = _ts11_members(sst_wnp_anom_daily)
 _cat2_members: Dict[str, np.ndarray] = {
-    "NCVI":             _ts11_members(_pv_daily),
-    "ISM":              _ts11_members(_ism_daily),
-    "SST_Grad":         _ts11_members(_swp_daily) - _ts11_members(_sio_daily),
+    "NCVI":             _ts11_members(ncvi_anom_daily),
+    "ISM":              _ts11_members(ism_anom_daily),
+    "SST_Grad":         _sst_as_ts - _sst_wnp_ts,
     "MSEstar_max_NCHN": _ts11_members(daily_max_mse_star_max),
     "MSEstar500_NCHN":  _ts11_members(daily_max_mse_star500),
     "Barrier_NCHN":     _ts11_members(daily_max_barrier),
