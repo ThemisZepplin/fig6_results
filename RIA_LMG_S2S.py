@@ -79,6 +79,22 @@ LABEL_MAP = {
     "SST_Grad": "SST Grad",
 }
 
+# 各因子时间序列图 Y 轴物理单位标签
+YLABEL_MAP = {
+    "NCHN_tp":          "Precip (mm)",
+    "sm_avg":           "Soil Moisture (mm)",
+    "WNPSH":            "Geopotential (m²/s²)",
+    "SSR_Avg":          "SSR (W/m²)",
+    "SHF_Avg":          "SHF (W/m²)",
+    "z500_anom_NCHN":   "Z500 Anomaly (m²/s²)",
+    "MSEstar_max_NCHN": "MSE* (J/kg)",
+    "MSEstar500_NCHN":  "MSE* (J/kg)",
+    "Barrier_NCHN":     "Energy Barrier (J/kg)",
+    "NCVI":             "PV Anomaly (PVU)",
+    "ISM":              "Precip (mm)",
+    "SST_Grad":         "SST Gradient (K)",
+}
+
 # 所有图表统一输出目录
 OUT_DIR = "/data1/huangy/fig6/NC/v3"
 
@@ -1472,6 +1488,7 @@ _ts13_ism   = _extract_full13_ts_per_member(ism_anom_da)
 _ts13_sst_grad = _extract_full13_ts_per_member(sst_grad_anom_da)
 
 # 整理为有序字典（顺序与 FACTOR_COLS 一致）
+# 注意：_ts13_ncvi 乘以 1e6 将原始 SI 单位（~1e-6）转换为 PVU
 _factor_ts13 = {
     "NCHN_tp":          _ts13_nchn_tp,
     "sm_avg":           _ts13_sm,
@@ -1482,7 +1499,7 @@ _factor_ts13 = {
     "MSEstar_max_NCHN": _ts13_mse_max,
     "MSEstar500_NCHN":  _ts13_mse500,
     "Barrier_NCHN":     _ts13_barrier,
-    "NCVI":             _ts13_ncvi,
+    "NCVI":             _ts13_ncvi * 1e6,
     "ISM":              _ts13_ism,
     "SST_Grad":         _ts13_sst_grad,
 }
@@ -1505,6 +1522,7 @@ for _grp_label, _grp_cols in [("A", FACTOR_COLS[:6]), ("B", FACTOR_COLS[6:])]:
             marker="o", markersize=5, label="Ensemble Mean",
         )
         _ax.set_title(LABEL_MAP.get(_col, _col).replace("\n", " "), fontsize=13)
+        _ax.set_ylabel(YLABEL_MAP.get(_col, ""), fontsize=10)
         _ax.xaxis.set_major_formatter(mdates.DateFormatter("%m-%d"))
         plt.setp(_ax.get_xticklabels(), rotation=30, ha="right")
         _ax.legend(fontsize=9, loc="best")
