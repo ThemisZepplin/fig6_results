@@ -82,14 +82,14 @@ LABEL_MAP = {
 # 各因子时间序列图 Y 轴物理单位标签
 YLABEL_MAP = {
     "NCHN_tp":          "Precip (mm)",
-    "sm_avg":           "Soil Moisture (mm)",
+    "sm_avg":           "Soil Moisture ($m^3/m^3$)",
     "WNPSH":            "Geopotential (m²/s²)",
     "SSR_Avg":          "SSR ($W/m^2$)",
     "SHF_Avg":          "SHF ($W/m^2$)",
     "z500_anom_NCHN":   "Z500 Anomaly (m²/s²)",
-    "MSEstar_max_NCHN": "MSE* (J/kg)",
-    "MSEstar500_NCHN":  "MSE* (J/kg)",
-    "Barrier_NCHN":     "Energy Barrier (J/kg)",
+    "MSEstar_max_NCHN": "Max $MSE^*$ (kJ/kg)",
+    "MSEstar500_NCHN":  "$MSE^*_{500}$ (kJ/kg)",
+    "Barrier_NCHN":     "Energy Barrier (kJ/kg)",
     "NCVI":             "PV Anomaly (PVU)",
     "ISM":              "Precip (mm)",
     "SST_Grad":         "SST Gradient (K)",
@@ -243,6 +243,7 @@ daily_max_sm = sm.resample(step="D").max()
 daily_max_sm = daily_max_sm.assign_coords(
     step=daily_max_sm["step"] - pd.Timedelta(days=1)
 )
+daily_max_sm = daily_max_sm / 200.0  # mm → m³/m³ (20cm = 200mm)
 
 # 1c. TP（降水）
 # 数据类型：累计量（step = 0h, 24h, 48h ... 自起报时刻的累计降水，Pa）
@@ -598,6 +599,9 @@ daily_max_mse_star_max = mse_star_max_da.resample(step="D").max()   # J/kg, dail
 # 注意：Barrier = MSEstar_max - MSEs（不要写反）。
 # 两侧均已重采样到 daily，step 坐标需一致；若不一致请先 .reindex_like() 对齐。
 daily_max_barrier = daily_max_mse_star_max - mse_s_daily.resample(step="D").mean()  # J/kg
+daily_max_mse_star500   = daily_max_mse_star500   / 1000.0  # J/kg → kJ/kg
+daily_max_mse_star_max  = daily_max_mse_star_max  / 1000.0  # J/kg → kJ/kg
+daily_max_barrier       = daily_max_barrier       / 1000.0  # J/kg → kJ/kg
 
 # =============================================================================
 # 2. 加载 S2S 前兆因子（异常值模式：V' = V_rt - V̄_hc）
