@@ -83,10 +83,10 @@ LABEL_MAP = {
 YLABEL_MAP = {
     "NCHN_tp":          "Precip (mm)",
     "sm_avg":           "Soil Moisture ($m^3/m^3$)",
-    "WNPSH":            "Geopotential (m²/s²)",
+    "WNPSH":            "850hPa Geopotential Height (gpm)",
     "SSR_Avg":          "SSR ($W/m^2$)",
     "SHF_Avg":          "SHF ($W/m^2$)",
-    "z500_anom_NCHN":   "Z500 Anomaly (m²/s²)",
+    "z500_anom_NCHN":   "Z500 Anomaly (gpm)",
     "MSEstar_max_NCHN": "Max $MSE^*$ (kJ/kg)",
     "MSEstar500_NCHN":  "$MSE^*_{500}$ (kJ/kg)",
     "Barrier_NCHN":     "Energy Barrier (kJ/kg)",
