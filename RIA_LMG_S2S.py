@@ -1391,10 +1391,10 @@ print("\nLMG 相对重要性分析全部完成！")
 YLABEL_MAP = {
     "NCHN_tp":            "Precipitation (mm)",
     "sm_avg":             "Soil Moisture ($m^3/m^3$)",
-    "WNPSH":              "850hPa Geopotential Height (m)",
+    "WNPSH":              "850hPa Geopotential Height (gpm)",
     "SSR_Avg":            "Net Shortwave Radiation ($W/m^2$)",
     "SHF_Avg":            "Sensible Heat Flux ($W/m^2$)",
-    "z500_anom_NCHN":     "Z500 Anomaly (m)",
+    "z500_anom_NCHN":     "Z500 Anomaly (gpm)",
     "NCVI":               "PV Anomaly (PVU)",
     "ISM":                "Monsoon Precip Anomaly (mm)",
     "SST_Grad":           "SST Gradient Anomaly (K)",
