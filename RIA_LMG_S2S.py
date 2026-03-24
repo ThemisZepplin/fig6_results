@@ -1460,6 +1460,68 @@ perf_df.to_csv(f"{OUT_DIR}/performance_check_{start_date}.csv", index=False)
 print(f"  ► 性能对比表已保存至: {OUT_DIR}/performance_check_{start_date}.csv")
 
 # =============================================================================
+# NEW: A/B residual difference check — 确认 Scheme A 与 Scheme B 是否仅为数值误差
+# =============================================================================
+print("\n" + "=" * 60)
+print("NEW: A/B Residual Difference Check")
+print("=" * 60)
+_max_ssr_diff = np.max(np.abs(SSR_residual_A_tr - SSR_residual_B_tr))
+_max_shf_diff = np.max(np.abs(SHF_residual_A_tr - SHF_residual_B_tr))
+print(f"  max|SSR_res_A - SSR_res_B| = {_max_ssr_diff:.4e}")
+print(f"  max|SHF_res_A - SHF_res_B| = {_max_shf_diff:.4e}")
+if _max_ssr_diff < 1e-6 and _max_shf_diff < 1e-6:
+    print("  ► 注意: 两方案残差差异接近机器误差 → 当前数据下 Scheme A ≈ Scheme B（纯数值重参数化）")
+else:
+    print("  ► 两方案残差存在实质差异 → Scheme A 与 Scheme B 在当前数据下不等价")
+
+# =============================================================================
+# NEW: Reparameterization / fitted-value equivalence check
+# — 比较 Raw 与 Scheme B 在训练样本上的 fitted values 是否近似相等
+# =============================================================================
+print("\n" + "=" * 60)
+print("NEW: Reparameterization Check — yhat_raw vs yhat_schemeB (training sample)")
+print("=" * 60)
+_max_yhat_diff = np.max(np.abs(_y_pred_raw_tr - _y_pred_B_tr))
+print(f"  max|yhat_raw - yhat_schemeB| = {_max_yhat_diff:.4e}")
+if _max_yhat_diff < 1e-6:
+    print("  ► 注意: 训练样本 fitted values 几乎完全一致 →")
+    print("    当前 residualization 更接近重参数化，而非改变模型预测列空间")
+    print("    (Raw 与 Scheme B 的 R² / Adj R² 应完全相同)")
+else:
+    print(f"  ► 两模型 fitted values 有实质差异 (max diff = {_max_yhat_diff:.4e})")
+
+# =============================================================================
+# NEW: Matrix condition number / eigenvalue / rank diagnostics
+# 基于标准化后的最终预测因子矩阵 (standardized predictors)
+# =============================================================================
+print("\n" + "=" * 60)
+print("NEW: Matrix Condition Diagnostics (based on standardized predictors)")
+print("=" * 60)
+
+_cond_rows = []
+for _mname, _Xarr in [
+    ("Raw",      X_scaled_arr),
+    ("Scheme A", X_scaled_arr_A),
+    ("Scheme B", X_scaled_arr_B),
+]:
+    _cond  = float(np.linalg.cond(_Xarr))
+    _eigs  = np.linalg.eigvalsh(_Xarr.T @ _Xarr)
+    _rank  = int(np.linalg.matrix_rank(_Xarr))
+    _cond_rows.append({
+        "Model":     _mname,
+        "Cond(X)":   round(_cond, 2),
+        "min_eig(X'X)": round(float(_eigs.min()), 6),
+        "max_eig(X'X)": round(float(_eigs.max()), 4),
+        "rank(X)":   _rank,
+        "n_cols":    _Xarr.shape[1],
+    })
+
+cond_df = pd.DataFrame(_cond_rows)
+print(cond_df.to_string(index=False))
+cond_df.to_csv(f"{OUT_DIR}/matrix_condition_check_{start_date}.csv", index=False)
+print(f"  ► 矩阵条件数检查已保存至: {OUT_DIR}/matrix_condition_check_{start_date}.csv")
+
+# =============================================================================
 # 6. 图1+图2：LMG 预测散点图 + 重要性棒格图（合并保存）
 # =============================================================================
 os.makedirs(OUT_DIR, exist_ok=True)
@@ -2044,7 +2106,8 @@ plt.show()
 print(f"  Scheme B 相关矩阵图已保存至: {out_corr_B}")
 
 # =============================================================================
-# NEW: Scheme B — 图 B: LMG 散点图 + 重要性柱状图（合并保存）
+# =============================================================================
+# NEW: Fix Scheme B plotting ylim/annotation — dynamic y-axis, no top whitespace
 # =============================================================================
 fig_lmg_B, (ax_sc_B, ax_bar_B) = plt.subplots(1, 2, figsize=(18, 7))
 
@@ -2070,13 +2133,16 @@ ax_bar_B.set_title("LMG Relative Importance (Scheme B)", fontsize=16, pad=15)
 ax_bar_B.set_ylabel("Normalized Relative Importance (%)", fontsize=14)
 ax_bar_B.set_xticks(range(len(_display_labs_B)))
 ax_bar_B.set_xticklabels(_display_labs_B, rotation=45, ha="right", fontsize=12)
-ax_bar_B.set_ylim(0, 25)
+# NEW: dynamic ylim — allow space for annotations above tallest bar
+_ymax_B = float(_sorted_lmg_B["normRelaImpt"].max()) * 1.45
+ax_bar_B.set_ylim(0, _ymax_B)
 for _bar, (_, _row) in zip(_bars_B, _sorted_lmg_B.iterrows()):
+    # NEW: annotation y position relative to dynamic ymax
     ax_bar_B.text(
         _bar.get_x() + _bar.get_width() / 2.0,
-        _bar.get_height() + 0.3,
+        _bar.get_height() + _ymax_B * 0.01,
         f"raw: {_row['rawRelaImpt']:.3f}\nnorm: {_row['normRelaImpt']:.1f}%",
-        ha="center", va="bottom", fontsize=10, rotation=90,
+        ha="center", va="bottom", fontsize=9, rotation=90,
     )
 plt.tight_layout()
 out_combined_lmg_B = f"{OUT_DIR}/1.s2s.fig_combined_LMG_{start_date}_SchemeB.png"
@@ -2107,9 +2173,11 @@ ax_ts_B.plot(plot_dates, ts_y_pred_B.values, marker="s", linestyle="--",
              label="Scheme B Predicted $T_{max}$ (Ensemble Mean)")
 
 _rmse_B_ts = float(np.sqrt(np.nanmean((ts_y - ts_y_pred_B.values) ** 2)))
+# NEW: clarify RMSE label — this is ECMWF ensemble mean vs Scheme B predicted ensemble mean
 ax_ts_B.text(
-    0.02, 0.92, f"RMSE: {_rmse_B_ts:.2f} °C",
-    transform=ax_ts_B.transAxes, fontsize=16,
+    0.02, 0.92,
+    f"RMSE (ECMWF ens.mean vs Scheme B pred.): {_rmse_B_ts:.2f} °C",
+    transform=ax_ts_B.transAxes, fontsize=13,
     bbox=dict(facecolor="white", alpha=0.8, edgecolor="gray"),
 )
 ax_ts_B.set_title("Time Series Evolution (Scheme B, LMG Model)", fontsize=16, pad=15)
