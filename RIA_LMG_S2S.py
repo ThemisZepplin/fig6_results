@@ -1504,6 +1504,71 @@ perf_df.to_csv(f"{OUT_DIR}/performance_comparison_{start_date}.csv", index=False
 print(f"Performance comparison saved to {OUT_DIR}/performance_comparison_{start_date}.csv")
 
 # =============================================================================
+# NEW: A/B residual difference check
+# =============================================================================
+print("\n" + "=" * 60)
+print("NEW: Scheme A vs Scheme B residual vector difference check")
+print("=" * 60)
+print("(If ~0, A and B differ only in reparameterization for current data)")
+_SSR_res_diff = float(np.max(np.abs(_A_SSR_residual - _B_SSR_residual)))
+_SHF_res_diff = float(np.max(np.abs(_A_SHF_residual - _B_SHF_residual)))
+print(f"  max|SSR_res_A - SSR_res_B| = {_SSR_res_diff:.6e}")
+print(f"  max|SHF_res_A - SHF_res_B| = {_SHF_res_diff:.6e}")
+if _SSR_res_diff < 1e-8 and _SHF_res_diff < 1e-8:
+    print("  => Near machine-precision: Scheme A/B are numerically equivalent (pure reparameterization).")
+else:
+    print("  => Scheme A and B produce materially different residuals.")
+
+# =============================================================================
+# NEW: Reparameterization / fitted-value equivalence check
+# =============================================================================
+print("\n" + "=" * 60)
+print("NEW: Reparameterization check — Raw vs Scheme B fitted values (training sample)")
+print("=" * 60)
+_yhat_raw = model_full.predict(X_scaled_ols).values
+_yhat_B   = model_B.predict(XB_scaled_ols).values
+_yhat_diff = float(np.max(np.abs(_yhat_raw - _yhat_B)))
+print(f"  max|yhat_Raw - yhat_SchemeB| (training sample) = {_yhat_diff:.6e}")
+if _yhat_diff < 1e-6:
+    print("  => Fitted values are virtually identical: residualization is a reparameterization,")
+    print("     not a change in the column space. R² / Adj-R² should be the same as Raw.")
+else:
+    print(f"  => Fitted values differ by up to {_yhat_diff:.4f} — residualization changes the model span.")
+
+# =============================================================================
+# NEW: Matrix condition diagnostics (condition number, min eigenvalue, rank)
+# =============================================================================
+print("\n" + "=" * 60)
+print("NEW: Matrix condition diagnostics (based on standardized predictor matrices)")
+print("=" * 60)
+
+def _matrix_diagnostics(X_arr: np.ndarray, model_name: str) -> dict:
+    """Compute condition number, min/max eigenvalue, and rank of X (no intercept)."""
+    cond    = float(np.linalg.cond(X_arr))
+    eigvals = np.linalg.eigvalsh(X_arr.T @ X_arr)
+    eig_min = float(eigvals.min())
+    eig_max = float(eigvals.max())
+    rank    = int(np.linalg.matrix_rank(X_arr))
+    return {
+        "model":      model_name,
+        "cond(X)":    round(cond, 2),
+        "min_eigval": round(eig_min, 6),
+        "max_eigval": round(eig_max, 4),
+        "rank(X)":    rank,
+        "n_cols":     X_arr.shape[1],
+    }
+
+_cond_rows = [
+    _matrix_diagnostics(X_scaled_arr,  "Raw"),
+    _matrix_diagnostics(XA_scaled_arr, "SchemeA"),
+    _matrix_diagnostics(XB_scaled_arr, "SchemeB"),
+]
+_cond_df = pd.DataFrame(_cond_rows)
+print(_cond_df.to_string(index=False))
+_cond_df.to_csv(f"{OUT_DIR}/matrix_condition_check_{start_date}.csv", index=False)
+print(f"Matrix condition check saved to {OUT_DIR}/matrix_condition_check_{start_date}.csv")
+
+# =============================================================================
 # 6. 图1+图2：LMG 预测散点图 + 重要性棒格图（合并保存）
 # =============================================================================
 os.makedirs(OUT_DIR, exist_ok=True)
@@ -1633,7 +1698,7 @@ ax_ts.set_ylabel("T2max (°C)", fontsize=14)
 
 rmse = np.sqrt(np.nanmean((ts_y - ts_y_pred.values) ** 2))
 ax_ts.text(
-    0.02, 0.92, f"RMSE: {rmse:.2f} °C",
+    0.02, 0.92, f"RMSE (ECMWF ens. mean vs predicted): {rmse:.2f} °C",
     transform=ax_ts.transAxes, fontsize=16,
     bbox=dict(facecolor="white", alpha=0.8, edgecolor="gray"),
 )
@@ -1754,7 +1819,7 @@ ax_ts_ri.plot(
 )
 rmse_ri = np.sqrt(np.nanmean((ts_y - ts_y_pred.values) ** 2))
 ax_ts_ri.text(
-    0.02, 0.92, f"RMSE: {rmse_ri:.2f} °C",
+    0.02, 0.92, f"RMSE (ECMWF ens. mean vs predicted): {rmse_ri:.2f} °C",
     transform=ax_ts_ri.transAxes, fontsize=16,
     bbox=dict(facecolor="white", alpha=0.8, edgecolor="gray"),
 )
@@ -1980,14 +2045,17 @@ ax_B_bar.set_title("Scheme B LMG Relative Importance (12 Factors)", fontsize=16,
 ax_B_bar.set_ylabel("Normalized Relative Importance (%)", fontsize=14)
 ax_B_bar.set_xticks(range(len(_disp_B)))
 ax_B_bar.set_xticklabels(_disp_B, rotation=45, ha="right", fontsize=12)
-ax_B_bar.set_ylim(0, 25)
+# NEW: Fix Scheme B plotting ylim/annotation — use dynamic y-axis range
+_ymax_B = float(_sorted_B["normRelaImpt"].max()) * 1.15
+ax_B_bar.set_ylim(0, _ymax_B)
 for _b, (_, _row) in zip(_bars_B, _sorted_B.iterrows()):
     ax_B_bar.text(
-        _b.get_x() + _b.get_width() / 2.0, _b.get_height() + 0.3,
+        _b.get_x() + _b.get_width() / 2.0,
+        _b.get_height() + _ymax_B * 0.02,
         f"raw: {_row['rawRelaImpt']:.3f}\nnorm: {_row['normRelaImpt']:.1f}%",
         ha="center", va="bottom", fontsize=10, rotation=90,
     )
-plt.tight_layout()
+plt.tight_layout(rect=[0, 0, 1, 0.97])
 _out_combined_B = f"{OUT_DIR}/1.s2s.fig_combined_LMG_{start_date}_SchemeB.png"
 plt.savefig(_out_combined_B, dpi=300, bbox_inches="tight")
 plt.show()
@@ -2115,7 +2183,8 @@ ax_ts_B.plot(plot_dates, ts_y_pred_B.values, marker="s", linestyle="--",
              color="seagreen", lw=2.5, zorder=5,
              label="Scheme B Predicted $T_{max}$")
 _rmse_B = float(np.sqrt(np.nanmean((ts_y - ts_y_pred_B.values) ** 2)))
-ax_ts_B.text(0.02, 0.92, f"RMSE: {_rmse_B:.2f} °C",
+# NEW: clarify RMSE label in time series plot
+ax_ts_B.text(0.02, 0.92, f"RMSE (ECMWF ens. mean vs Scheme B predicted): {_rmse_B:.2f} °C",
              transform=ax_ts_B.transAxes, fontsize=16,
              bbox=dict(facecolor="white", alpha=0.8, edgecolor="gray"))
 ax_ts_B.set_title("Time Series Evolution (Scheme B, Hierarchical Residual Model)", fontsize=16, pad=15)
