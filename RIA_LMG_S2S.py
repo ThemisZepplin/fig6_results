@@ -259,29 +259,47 @@ z_WNPSH = z_ds["gh"].loc[:, start_date, :, 850, 25:15, 115:150]
 daily_max_z_WNPSH = z_WNPSH.resample(step="D").max()
 
 # 1e. SSR（地面短波辐射）
-# 数据类型：瞬时/累计（ssr，step = 0h, 24h, 48h, ...）
-# resample(step="D").mean() → 每日所有瞬时值的均值；step 坐标 = 0d, 1d, 2d, ...
-# 若 ssr 仅有每日一个瞬时值，均值等价于该值
+# 数据类型：累计通量（ssr，step = 0h, 24h, 48h, ...），单位 J/m²，从预报起始时刻累积至 step
+# 正确日均通量（W/m²）的构造方式：
+#   严格做法（Strict）：先在原始 step 分辨率上 .diff() 得每步增量 (J/m²)，
+#                       再 /step_interval_s 得瞬时 W/m²，再 resample 取日均
+#   简化做法（Current）：resample 取日均累积量，再 .diff() 取日增量，再 /86400
+#   若 step 步长 ≡ 24 h，两者数学等价（均等于 (E_{t+1} - E_t) / 86400）
 # 研究时段对应 step 2d（2023-06-14）~ 12d（2023-06-24）
 ssr_file = "/data1/huangy/fig6/NC/2023-06/ecmf_rel_pf_sfc_radiation2023-06.grb"
 ssr_ds = xr.open_dataset(ssr_file, engine="cfgrib")
 _validate_dataset(ssr_ds, "ssr (SSR_Avg)")
 ssr = ssr_ds["ssr"].loc[:, start_date, :, 44:35, 114:119]
 daily_mean_ssr = ssr.resample(step="D").mean()
-# Convert accumulated J/m² → daily average W/m²: diff() gives daily increment in J/m²; divide by 86400 s/day → W/m²
+# Current method (resample-then-diff): correct for uniform 24-h step data
 daily_flux_ssr = daily_mean_ssr.diff(dim="step") / 86400.0
+# Strict method (diff-then-resample): infer actual step interval at raw resolution
+_ssr_step_diffs = np.diff(ssr.step.values.astype("timedelta64[s]").astype(np.float64))
+assert np.allclose(_ssr_step_diffs, _ssr_step_diffs[0], rtol=1e-6), \
+    f"SSR step intervals are non-uniform: {_ssr_step_diffs}"
+_ssr_step_s = float(_ssr_step_diffs[0])  # seconds between consecutive steps
+daily_flux_ssr_strict = (ssr.diff(dim="step") / _ssr_step_s).resample(step="D").mean()
 
 # 1f. SSHF（感热通量）
-# 数据类型：瞬时/累计（sshf，step = 0h, 24h, 48h, ...）
-# resample(step="D").mean() → 每日均值；step 坐标 = 0d, 1d, 2d, ...
+# 数据类型：累计通量（sshf，step = 0h, 24h, 48h, ...），单位 J/m²
 # 研究时段对应 step 2d（2023-06-14）~ 12d（2023-06-24）
 sshf_file = "/data1/huangy/fig6/NC/2023-06/ecmf_rel_pf_sfc_hflux2023-06.grb"
 sshf_ds = xr.open_dataset(sshf_file, engine="cfgrib")
 _validate_dataset(sshf_ds, "sshf (SHF_Avg)")
 sshf = sshf_ds["sshf"].loc[:, start_date, :, 44:35, 114:119]
 daily_mean_sshf = sshf.resample(step="D").mean()
-# Convert accumulated J/m² → daily average W/m²: diff() gives daily increment in J/m²; divide by 86400 s/day → W/m²
+# Current method (resample-then-diff)
 daily_flux_sshf = daily_mean_sshf.diff(dim="step") / 86400.0
+# Strict method (diff-then-resample)
+_sshf_step_diffs = np.diff(sshf.step.values.astype("timedelta64[s]").astype(np.float64))
+assert np.allclose(_sshf_step_diffs, _sshf_step_diffs[0], rtol=1e-6), \
+    f"SSHF step intervals are non-uniform: {_sshf_step_diffs}"
+_sshf_step_s = float(_sshf_step_diffs[0])
+daily_flux_sshf_strict = (sshf.diff(dim="step") / _sshf_step_s).resample(step="D").mean()
+
+# =============================================================================
+# DIAGNOSTIC deferred: runs after extract_period_mean is defined (see below)
+# =============================================================================
 
 # 1g. MSE 热力因子框架（Li & Tamarin-Brodsky, Sci Adv 2026）
 # -----------------------------------------------------------------------
@@ -820,6 +838,62 @@ def extract_period_mean(daily_data, is_reforecast=False):
         return selected.mean(dim=list(selected.dims)).values.flatten()[0]
     dims_to_mean = [d for d in selected.dims if d != "number"]
     return selected.mean(dim=dims_to_mean).values.flatten()
+
+
+# =============================================================================
+# DIAGNOSTIC: SSR/SHF flux construction comparison
+# Q1: Old (cumulative J/m²) vs New (W/m²) — did the Raw training features change?
+# Q3: Current (resample-then-diff) vs Strict (diff-then-resample) — are they equiv?
+# Must run after extract_period_mean is defined.
+# =============================================================================
+def _arr_summary(a: np.ndarray, b: np.ndarray, label: str) -> None:
+    diff = np.abs(a - b)
+    if len(a) >= 2 and np.std(a) > 0 and np.std(b) > 0:
+        r = float(np.corrcoef(a, b)[0, 1])
+        print(f"  {label:44s}: max_abs_diff={diff.max():.4e}  r={r:.6f}")
+    else:
+        print(f"  {label:44s}: max_abs_diff={diff.max():.4e}  (r undefined)")
+
+print("\n" + "=" * 70)
+print("DIAGNOSTIC: SSR/SHF flux construction comparison")
+print("=" * 70)
+print(f"  SSR  raw step interval inferred: {_ssr_step_s:.0f} s "
+      f"({_ssr_step_s / 3600:.1f} h)")
+print(f"  SSHF raw step interval inferred: {_sshf_step_s:.0f} s "
+      f"({_sshf_step_s / 3600:.1f} h)")
+
+_ssr_old_vec = extract_period_mean(daily_mean_ssr)        # J/m² cumulative (pre-fix)
+_ssr_new_vec = extract_period_mean(daily_flux_ssr)        # W/m² current (resample-then-diff)
+_ssr_str_vec = extract_period_mean(daily_flux_ssr_strict) # W/m² strict (diff-then-resample)
+_shf_old_vec = extract_period_mean(daily_mean_sshf)
+_shf_new_vec = extract_period_mean(daily_flux_sshf)
+_shf_str_vec = extract_period_mean(daily_flux_sshf_strict)
+
+print("\n--- Q1: Old (cumulative J/m²) vs New (W/m²  resample-then-diff/86400) ---")
+_arr_summary(_ssr_old_vec, _ssr_new_vec, "SSR  old-J/m²   vs  new-W/m²")
+_arr_summary(_shf_old_vec, _shf_new_vec, "SSHF old-J/m²   vs  new-W/m²")
+print("  → Raw model SSR_Avg / SHF_Avg DID change (J/m² cumulative → W/m² flux).")
+print(f"  → Scale factor ≈ 1/{86400:.0f} "
+      "(≡ dividing out the 1-day accumulation window).")
+
+print("\n--- Q3: Current (resample-then-diff) vs Strict (diff-then-resample) ---")
+_arr_summary(_ssr_new_vec, _ssr_str_vec, "SSR  current-W/m²  vs  strict-W/m²")
+_arr_summary(_shf_new_vec, _shf_str_vec, "SSHF current-W/m²  vs  strict-W/m²")
+_equiv = (
+    np.allclose(_ssr_new_vec, _ssr_str_vec, rtol=1e-6, atol=1e-4)
+    and np.allclose(_shf_new_vec, _shf_str_vec, rtol=1e-6, atol=1e-4)
+)
+if _equiv:
+    print("  → Current ≡ Strict (step interval is uniform 24 h as expected).")
+    print("  → Switching pipeline to Strict (more physically explicit); values unchanged.")
+else:
+    print("  → Current ≠ Strict — step interval is sub-daily. "
+          "Switching pipeline to Strict for correctness.")
+print("=" * 70)
+
+# Use the strict construction throughout the pipeline from this point on
+daily_flux_ssr  = daily_flux_ssr_strict
+daily_flux_sshf = daily_flux_sshf_strict
 
 
 def extract_daily_timeseries(daily_data, is_reforecast=False):
@@ -2008,8 +2082,8 @@ _cat1_members: Dict[str, np.ndarray] = {
     "NCHN_tp":        _ts11_members(daily_max_NCHNtp),
     "sm_avg":         _ts11_members(daily_max_sm),
     "WNPSH":          _ts11_members(daily_max_z_WNPSH),
-    "SSR_Avg":        _ts11_members(daily_flux_ssr),   # already W/m² (converted at lines 272/284)
-    "SHF_Avg":        _ts11_members(daily_flux_sshf),  # already W/m² (converted at lines 272/284)
+    "SSR_Avg":        _ts11_members(daily_flux_ssr),   # already W/m² (strict diff-then-resample, reassigned at line ~895)
+    "SHF_Avg":        _ts11_members(daily_flux_sshf),  # already W/m² (strict diff-then-resample, reassigned at line ~895)
     "z500_anom_NCHN": _ts11_members(daily_max_z_NCHN) - _ts11_z500_refo,
 }
 
