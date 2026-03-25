@@ -268,6 +268,8 @@ ssr_ds = xr.open_dataset(ssr_file, engine="cfgrib")
 _validate_dataset(ssr_ds, "ssr (SSR_Avg)")
 ssr = ssr_ds["ssr"].loc[:, start_date, :, 44:35, 114:119]
 daily_mean_ssr = ssr.resample(step="D").mean()
+# Convert accumulated J/m² → daily average W/m²: diff() gives daily increment in J/m²; divide by 86400 s/day → W/m²
+daily_flux_ssr = daily_mean_ssr.diff(dim="step") / 86400.0
 
 # 1f. SSHF（感热通量）
 # 数据类型：瞬时/累计（sshf，step = 0h, 24h, 48h, ...）
@@ -278,6 +280,8 @@ sshf_ds = xr.open_dataset(sshf_file, engine="cfgrib")
 _validate_dataset(sshf_ds, "sshf (SHF_Avg)")
 sshf = sshf_ds["sshf"].loc[:, start_date, :, 44:35, 114:119]
 daily_mean_sshf = sshf.resample(step="D").mean()
+# Convert accumulated J/m² → daily average W/m²: diff() gives daily increment in J/m²; divide by 86400 s/day → W/m²
+daily_flux_sshf = daily_mean_sshf.diff(dim="step") / 86400.0
 
 # 1g. MSE 热力因子框架（Li & Tamarin-Brodsky, Sci Adv 2026）
 # -----------------------------------------------------------------------
@@ -1028,8 +1032,8 @@ temp_mean_val = extract_period_mean(daily_max_tmx)
 sm_avg_val = extract_period_mean(daily_max_sm)
 NCHN_tp_val = extract_period_mean(daily_max_NCHNtp)
 WNPSH_avg_val = extract_period_mean(daily_max_z_WNPSH)
-SSR_Avg_val = extract_period_mean(daily_mean_ssr)
-SHF_Avg_val = extract_period_mean(daily_mean_sshf)
+SSR_Avg_val = extract_period_mean(daily_flux_ssr)
+SHF_Avg_val = extract_period_mean(daily_flux_sshf)
 z500_2023_NCHN_val = extract_period_mean(daily_max_z_NCHN)
 z500_mean_NCHN_val = extract_period_mean(daily_max_z_refo_NCHN, is_reforecast=True)
 z500_anom_NCHN_val = z500_2023_NCHN_val - z500_mean_NCHN_val
@@ -1666,8 +1670,8 @@ ts_data_dict = {
     "NCHN_tp": extract_daily_timeseries(daily_max_NCHNtp),
     "sm_avg": extract_daily_timeseries(daily_max_sm),
     "WNPSH": extract_daily_timeseries(daily_max_z_WNPSH),
-    "SSR_Avg": extract_daily_timeseries(daily_mean_ssr),
-    "SHF_Avg": extract_daily_timeseries(daily_mean_sshf),
+    "SSR_Avg": extract_daily_timeseries(daily_flux_ssr),
+    "SHF_Avg": extract_daily_timeseries(daily_flux_sshf),
     "z500_anom_NCHN": extract_daily_timeseries(daily_max_z_NCHN) - ts_z500_refo_mean,
     "NCVI": np.repeat(ncvi_arr.mean(), days_len),
     "ISM": np.repeat(ism_arr.mean(), days_len),
@@ -1693,8 +1697,8 @@ per_member_feature_arrays = {
     "NCHN_tp": extract_daily_timeseries_per_member(daily_max_NCHNtp),
     "sm_avg": extract_daily_timeseries_per_member(daily_max_sm),
     "WNPSH": extract_daily_timeseries_per_member(daily_max_z_WNPSH),
-    "SSR_Avg": extract_daily_timeseries_per_member(daily_mean_ssr),
-    "SHF_Avg": extract_daily_timeseries_per_member(daily_mean_sshf),
+    "SSR_Avg": extract_daily_timeseries_per_member(daily_flux_ssr),
+    "SHF_Avg": extract_daily_timeseries_per_member(daily_flux_sshf),
     "z500_anom_NCHN": ts_z500_members - ts_z500_refo_mean,
 }
 for m in range(n_members):
@@ -2004,8 +2008,8 @@ _cat1_members: Dict[str, np.ndarray] = {
     "NCHN_tp":        _ts11_members(daily_max_NCHNtp),
     "sm_avg":         _ts11_members(daily_max_sm),
     "WNPSH":          _ts11_members(daily_max_z_WNPSH),
-    "SSR_Avg":        _ts11_members(daily_mean_ssr.diff(dim="step") / 86400),   # J/m²→W/m² (Δ/day)
-    "SHF_Avg":        _ts11_members(daily_mean_sshf.diff(dim="step") / 86400),  # J/m²→W/m² (Δ/day)
+    "SSR_Avg":        _ts11_members(daily_flux_ssr),   # already W/m² (converted at lines 272/284)
+    "SHF_Avg":        _ts11_members(daily_flux_sshf),  # already W/m² (converted at lines 272/284)
     "z500_anom_NCHN": _ts11_members(daily_max_z_NCHN) - _ts11_z500_refo,
 }
 
