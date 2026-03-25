@@ -1080,9 +1080,7 @@ def apply_residual_transform(y: np.ndarray, X: np.ndarray, fitted_model, feature
 
 
 def compute_vif_table(X_df: pd.DataFrame, model_name: str) -> pd.DataFrame:
-    """NEW: Compute Variance Inflation Factor for each predictor in X_df.
-    Returns DataFrame with columns ['model', 'predictor', 'VIF'].
-    """
+    """LEGACY (kept for reference): old VIF computation without centering."""
     from statsmodels.stats.outliers_influence import variance_inflation_factor
     X_arr = X_df.values
     vif_list = []
@@ -1093,6 +1091,47 @@ def compute_vif_table(X_df: pd.DataFrame, model_name: str) -> pd.DataFrame:
             vif_val = np.nan
         vif_list.append({"model": model_name, "predictor": col, "VIF": vif_val})
     return pd.DataFrame(vif_list)
+
+
+def compute_vif_corrected(X_df: pd.DataFrame, model_name: str) -> pd.DataFrame:
+    """Corrected VIF: center X first, then add constant, then compute VIF for
+    each predictor at index i+1 (skipping the constant at index 0).
+    Also cross-validates with corr-matrix inverse method (diag(inv(R))).
+    Returns DataFrame with columns ['model','predictor','VIF_sm','VIF_corrinv','Abs_Diff'].
+    """
+    from statsmodels.stats.outliers_influence import variance_inflation_factor
+    X = X_df.astype(float).copy()
+    Xc = X - X.mean(axis=0)                      # center
+    Xvif = sm_api.add_constant(Xc, has_constant="add")  # add intercept at col 0
+    Xvif_arr = Xvif.values
+
+    # Method 1: statsmodels VIF (skip col 0 = constant)
+    vif_sm = []
+    for i in range(len(X.columns)):
+        try:
+            v = variance_inflation_factor(Xvif_arr, i + 1)
+        except Exception:
+            v = np.nan
+        vif_sm.append(v)
+
+    # Method 2: diag(inv(R))
+    R = np.corrcoef(X.values, rowvar=False)
+    try:
+        vif_corrinv = list(np.diag(np.linalg.inv(R)))
+    except np.linalg.LinAlgError:
+        vif_corrinv = [np.nan] * len(X.columns)
+
+    rows = []
+    for col, v_sm, v_ci in zip(X.columns, vif_sm, vif_corrinv):
+        rows.append({
+            "model":      model_name,
+            "predictor":  col,
+            "VIF_sm":     round(float(v_sm),  4) if np.isfinite(v_sm) else np.nan,
+            "VIF_corrinv":round(float(v_ci),  4) if np.isfinite(v_ci) else np.nan,
+            "Abs_Diff": (round(abs(float(v_sm) - float(v_ci)), 4)
+                         if (np.isfinite(v_sm) and np.isfinite(v_ci)) else np.nan),
+        })
+    return pd.DataFrame(rows)
 
 
 # =============================================================================
@@ -1192,13 +1231,18 @@ schemeA_df["SSR_residual"] = _A_SSR_residual
 schemeA_df["SHF_residual"] = _A_SHF_residual
 
 # =============================================================================
-# NEW: Scheme B Residualization (training on data_df samples)
+# NEW: Scheme B Residualization — CASCADE (truly non-equivalent to Scheme A)
 # =============================================================================
+# USE_STRICT_MEDIATION_B: user-configurable constant (SCREAMING_SNAKE_CASE intentional).
+# Set True to exclude SM_residual from final Scheme B model
+# (SM treated as acting only through SSR/SHF, not directly on T2max).
+USE_STRICT_MEDIATION_B = False
+
 # Step B1: SM_residual = resid(sm_avg ~ NCHN_tp)  [same as Scheme A Step 1]
 _B_sm_model = _A_sm_model   # identical to Step A1
 _B_SM_residual = _A_SM_residual.copy()
 
-# Step B2: SSR_residual = resid(SSR_Avg ~ NCHN_tp + SM_residual)  [uses SM_residual]
+# Step B2: SSR_residual = resid(SSR_Avg ~ NCHN_tp + SM_residual)
 _B_ssr_model = fit_residual_model(
     data_df["SSR_Avg"].values,
     np.column_stack([data_df["NCHN_tp"].values, _B_SM_residual]),
@@ -1211,17 +1255,40 @@ _B_SSR_residual = apply_residual_transform(
     ["NCHN_tp", "SM_residual"],
 )
 
-# Step B3: SHF_residual = resid(SHF_Avg ~ NCHN_tp + SM_residual)  [uses SM_residual]
+# Step B3 (CASCADE — NEW): SHF_residual = resid(SHF_Avg ~ NCHN_tp + SM_residual + SSR_residual)
+# This is the key difference from Scheme A: SHF is further stripped of SSR's contribution
 _B_shf_model = fit_residual_model(
     data_df["SHF_Avg"].values,
-    np.column_stack([data_df["NCHN_tp"].values, _B_SM_residual]),
-    ["NCHN_tp", "SM_residual"],
+    np.column_stack([data_df["NCHN_tp"].values, _B_SM_residual, _B_SSR_residual]),
+    ["NCHN_tp", "SM_residual", "SSR_residual"],
 )
 _B_SHF_residual = apply_residual_transform(
     data_df["SHF_Avg"].values,
-    np.column_stack([data_df["NCHN_tp"].values, _B_SM_residual]),
+    np.column_stack([data_df["NCHN_tp"].values, _B_SM_residual, _B_SSR_residual]),
     _B_shf_model,
-    ["NCHN_tp", "SM_residual"],
+    ["NCHN_tp", "SM_residual", "SSR_residual"],
+)
+
+print("\n" + "=" * 60)
+print("NEW: Revised Non-Equivalent Scheme A / Scheme B")
+print("=" * 60)
+_scheme_b_label = "Scheme_B_strict_mediation" if USE_STRICT_MEDIATION_B else "Scheme_B_cascade"
+if USE_STRICT_MEDIATION_B:
+    print("Scheme B mode: Scheme_B_strict_mediation (SM_residual excluded from final model)")
+else:
+    print("Scheme B mode: Scheme_B_cascade (SM_residual included in final model)")
+
+# Build Scheme B DataFrame
+# For strict mediation: remove SM_residual from predictor list
+_FACTOR_COLS_RES_B_FULL = [
+    "NCHN_tp", "SM_residual", "WNPSH", "SSR_residual", "SHF_residual",
+    "z500_anom_NCHN", "MSEstar_max_NCHN", "MSEstar500_NCHN", "Barrier_NCHN",
+    "NCVI", "ISM", "SST_Grad",
+]
+_factor_cols_B_active = (
+    [c for c in _FACTOR_COLS_RES_B_FULL if c != "SM_residual"]
+    if USE_STRICT_MEDIATION_B
+    else _FACTOR_COLS_RES_B_FULL
 )
 
 # Build Scheme B DataFrame
@@ -1312,23 +1379,23 @@ print("NEW: Scheme B — OLS / LMG / relativeIMP")
 print("=" * 60)
 
 scaler_B = StandardScaler()
-XB_scaled_arr = scaler_B.fit_transform(schemeB_df[FACTOR_COLS_RES])
-XB_scaled = pd.DataFrame(XB_scaled_arr, columns=FACTOR_COLS_RES)
+XB_scaled_arr = scaler_B.fit_transform(schemeB_df[_factor_cols_B_active])
+XB_scaled = pd.DataFrame(XB_scaled_arr, columns=_factor_cols_B_active)
 XB_scaled_ols = sm_api.add_constant(XB_scaled)
 model_B = sm_api.OLS(y_final, XB_scaled_ols).fit()
 r2_B = model_B.rsquared
 r2_adj_B = model_B.rsquared_adj
 print(f"Scheme B OLS  R²: {r2_B:.4f} | Adj R²: {r2_adj_B:.4f}")
 
-lmg_B = compute_lmg(y=y_final, X=XB_scaled_arr, col_names=FACTOR_COLS_RES)
+lmg_B = compute_lmg(y=y_final, X=XB_scaled_arr, col_names=_factor_cols_B_active)
 print("\nScheme B LMG results:")
 print(lmg_B.to_string(index=False))
 
 ri_B_input = pd.concat([
     pd.DataFrame({"temp_mean": y_final}),
-    schemeB_df[FACTOR_COLS_RES].reset_index(drop=True),
+    schemeB_df[_factor_cols_B_active].reset_index(drop=True),
 ], axis=1)
-ri_B = relativeImp(ri_B_input, outcomeName="temp_mean", driverNames=FACTOR_COLS_RES)
+ri_B = relativeImp(ri_B_input, outcomeName="temp_mean", driverNames=_factor_cols_B_active)
 print("\nScheme B relativeIMP results:")
 print(ri_B.to_string(index=False))
 
@@ -1382,42 +1449,64 @@ decorr_df.to_csv(f"{OUT_DIR}/decorrelation_check_{start_date}.csv", index=False)
 print(f"Decorrelation check saved to {OUT_DIR}/decorrelation_check_{start_date}.csv")
 
 # =============================================================================
-# NEW: VIF Diagnostics
+# NEW: Corrected VIF Diagnostics
 # =============================================================================
 print("\n" + "=" * 60)
-print("NEW: VIF Diagnostics (Raw vs Scheme A vs Scheme B)")
+print("NEW: Corrected VIF Diagnostics")
+print("(Previous VIF values were likely distorted by missing intercept,")
+print(" wrong column indexing, or non-centered design matrix.)")
+print("Now using: center X → add constant → VIF at col index i+1")
+print("Cross-validated with diag(inv(R)).")
 print("=" * 60)
 
+_vif_raw_c  = compute_vif_corrected(X_df.reset_index(drop=True), "Raw")
+_vif_A_c    = compute_vif_corrected(schemeA_df[FACTOR_COLS_RES].reset_index(drop=True), "SchemeA")
+_vif_B_c    = compute_vif_corrected(schemeB_df[_factor_cols_B_active].reset_index(drop=True), "SchemeB")
+
+print("\nRaw — Corrected VIF:")
+print(_vif_raw_c[["predictor","VIF_sm","VIF_corrinv","Abs_Diff"]].to_string(index=False))
+_max_diff_raw = _vif_raw_c["Abs_Diff"].max()
+print(f"  Max |VIF_sm - VIF_corrinv| = {_max_diff_raw:.4f}")
+
+print("\nScheme A — Corrected VIF:")
+print(_vif_A_c[["predictor","VIF_sm","VIF_corrinv","Abs_Diff"]].to_string(index=False))
+_max_diff_A = _vif_A_c["Abs_Diff"].max()
+print(f"  Max |VIF_sm - VIF_corrinv| = {_max_diff_A:.4f}")
+
+print("\nScheme B — Corrected VIF:")
+print(_vif_B_c[["predictor","VIF_sm","VIF_corrinv","Abs_Diff"]].to_string(index=False))
+_max_diff_B = _vif_B_c["Abs_Diff"].max()
+print(f"  Max |VIF_sm - VIF_corrinv| = {_max_diff_B:.4f}")
+
+for _mx, _nm in [(_max_diff_raw,"Raw"), (_max_diff_A,"SchemeA"), (_max_diff_B,"SchemeB")]:
+    if _mx < 1.0:
+        print(f"  => {_nm}: Two VIF methods are consistent (max diff < 1.0). Corrected VIF is self-consistent.")
+    else:
+        print(f"  => {_nm}: Two VIF methods disagree (max diff = {_mx:.2f}). Check for near-singularity.")
+
+_vif_corrected_all = pd.concat([_vif_raw_c, _vif_A_c, _vif_B_c], ignore_index=True)
+_vif_corrected_all.to_csv(f"{OUT_DIR}/vif_summary_corrected_{start_date}.csv", index=False)
+print(f"\nCorrected VIF saved to {OUT_DIR}/vif_summary_corrected_{start_date}.csv")
+
+# Also keep old (legacy) VIF for reference
 vif_raw = compute_vif_table(X_df.reset_index(drop=True), "Raw")
 vif_A   = compute_vif_table(schemeA_df[FACTOR_COLS_RES].reset_index(drop=True), "SchemeA")
-vif_B   = compute_vif_table(schemeB_df[FACTOR_COLS_RES].reset_index(drop=True), "SchemeB")
+vif_B   = compute_vif_table(schemeB_df[_factor_cols_B_active].reset_index(drop=True), "SchemeB")
 
-print("Raw VIF:")
-print(vif_raw.to_string(index=False))
-print("\nScheme A VIF:")
-print(vif_A.to_string(index=False))
-print("\nScheme B VIF:")
-print(vif_B.to_string(index=False))
-
-# Summary comparison table
-_vif_raw_series  = vif_raw.set_index("predictor")["VIF"].rename("Raw_VIF")
-_vif_A_series    = vif_A.set_index("predictor")["VIF"].rename("SchemeA_VIF")
-_vif_B_series    = vif_B.set_index("predictor")["VIF"].rename("SchemeB_VIF")
-# Raw uses sm_avg/SSR_Avg/SHF_Avg; A&B use SM_residual/SSR_residual/SHF_residual
-# Build side-by-side with remapped names
+# Summary comparison table (using corrected VIF_sm values)
 _vif_remap = {
     "sm_avg":   "SM_residual",
     "SSR_Avg":  "SSR_residual",
     "SHF_Avg":  "SHF_residual",
 }
-_vif_raw_r = vif_raw.copy()
-_vif_raw_r["predictor"] = _vif_raw_r["predictor"].replace(_vif_remap)
+_vif_raw_c2 = _vif_raw_c.copy()
+_vif_raw_c2["predictor"] = _vif_raw_c2["predictor"].replace(_vif_remap)
 _vif_cmp = (
-    _vif_raw_r.set_index("predictor")[["VIF"]].rename(columns={"VIF": "Raw_VIF"})
-    .join(_vif_A_series, how="outer")
-    .join(_vif_B_series, how="outer")
+    _vif_raw_c2.set_index("predictor")[["VIF_sm"]].rename(columns={"VIF_sm": "Raw_VIF"})
+    .join(_vif_A_c.set_index("predictor")["VIF_sm"].rename("SchemeA_VIF"), how="outer")
+    .join(_vif_B_c.set_index("predictor")["VIF_sm"].rename("SchemeB_VIF"), how="outer")
 ).reset_index().rename(columns={"index": "predictor"})
-print("\nVIF Comparison Summary:")
+print("\nVIF Comparison Summary (corrected):")
 print(_vif_cmp.to_string(index=False))
 _vif_cmp.to_csv(f"{OUT_DIR}/vif_summary_{start_date}.csv", index=False)
 print(f"VIF summary saved to {OUT_DIR}/vif_summary_{start_date}.csv")
@@ -1490,8 +1579,9 @@ def _perf_row(name, model, y_true, X_ols):
         "model":    name,
         "R2":       round(model.rsquared,     4),
         "Adj_R2":   round(model.rsquared_adj, 4),
-        "RMSE":     round(rmse_val,            4),
+        "Train_RMSE_member_vs_ECMWF_member": round(rmse_val, 4),
         "Corr":     round(corr_val,            4),
+        "RMSE_Definition": "Training-sample member-level RMSE: OLS fitted vs ECMWF T2max member",
     }
 
 perf_df = pd.DataFrame([
@@ -1510,14 +1600,18 @@ print("\n" + "=" * 60)
 print("NEW: Scheme A vs Scheme B residual vector difference check")
 print("=" * 60)
 print("(If ~0, A and B differ only in reparameterization for current data)")
+print("(With the new cascade B: SHF_res_B = resid(SHF~TP+SM_res+SSR_res_B), different from A)")
 _SSR_res_diff = float(np.max(np.abs(_A_SSR_residual - _B_SSR_residual)))
 _SHF_res_diff = float(np.max(np.abs(_A_SHF_residual - _B_SHF_residual)))
 print(f"  max|SSR_res_A - SSR_res_B| = {_SSR_res_diff:.6e}")
 print(f"  max|SHF_res_A - SHF_res_B| = {_SHF_res_diff:.6e}")
 if _SSR_res_diff < 1e-8 and _SHF_res_diff < 1e-8:
-    print("  => Near machine-precision: Scheme A/B are numerically equivalent (pure reparameterization).")
+    print("  WARNING: Scheme A/B are still numerically equivalent (pure reparameterization).")
+    print("  This is unexpected with cascade B — check data for numerical near-collinearity.")
+elif _SHF_res_diff > 1e-3:
+    print("  => Scheme A and B produce materially different SHF residuals (cascade B is truly non-equivalent).")
 else:
-    print("  => Scheme A and B produce materially different residuals.")
+    print("  => Scheme A and B produce slightly different residuals.")
 
 # =============================================================================
 # NEW: Reparameterization / fitted-value equivalence check
@@ -1571,6 +1665,12 @@ print(f"Matrix condition check saved to {OUT_DIR}/matrix_condition_check_{start_
 # =============================================================================
 # 6. 图1+图2：LMG 预测散点图 + 重要性棒格图（合并保存）
 # =============================================================================
+# NOTE: RMSE definition check for time-series plots printed here as a diagnostic
+# summary (actual ts_y/ts_y_pred computed in section 7; the RMSE labels in the
+# figures reference the same quantities).
+# The RMSE in performance_comparison_{start_date}.csv is Train_RMSE_member_vs_ECMWF_member
+# (training-sample, member-level). The daily time-series RMSE (plotted in figures) is
+# computed from ensemble-mean daily predictions and is printed inside each ts figure.
 os.makedirs(OUT_DIR, exist_ok=True)
 
 fig_lmg, (ax_scatter, ax_bar) = plt.subplots(1, 2, figsize=(18, 7))
@@ -1696,15 +1796,21 @@ ax_ts.plot(plot_dates, ts_y_pred.values, marker="s", linestyle="--", color="dodg
 ax_ts.set_title("Time Series Evolution (All 12 Factors, LMG Model)", fontsize=16, pad=15)
 ax_ts.set_ylabel("T2max (°C)", fontsize=14)
 
+# NEW: clarify RMSE label in time series plot (Part 2)
 rmse = np.sqrt(np.nanmean((ts_y - ts_y_pred.values) ** 2))
+rmse_vs_era5 = np.sqrt(np.nanmean((era5_obs_ts - ts_y_pred.values) ** 2))
+_rmse_text = (
+    f"Daily RMSE (Pred ens mean vs ECMWF ens mean): {rmse:.2f} °C\n"
+    f"Daily RMSE (Pred ens mean vs ERA5): {rmse_vs_era5:.2f} °C"
+)
 ax_ts.text(
-    0.02, 0.92, f"RMSE (ECMWF ens. mean vs predicted): {rmse:.2f} °C",
-    transform=ax_ts.transAxes, fontsize=16,
+    0.02, 0.95, _rmse_text,
+    transform=ax_ts.transAxes, fontsize=13, va="top", ha="left",
     bbox=dict(facecolor="white", alpha=0.8, edgecolor="gray"),
 )
 ax_ts.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m-%d"))
 fig_ts.autofmt_xdate(rotation=30)
-ax_ts.legend(fontsize=12)
+ax_ts.legend(loc="lower right", fontsize=12)
 ax_ts.grid(True, linestyle=":", alpha=0.7)
 plt.tight_layout()
 out_ts = f"{OUT_DIR}/1.s2s.fig_ts_LMG_{start_date}.png"
@@ -1818,9 +1924,14 @@ ax_ts_ri.plot(
     label="OLS Prediction (Johnson / relativeIMP)",
 )
 rmse_ri = np.sqrt(np.nanmean((ts_y - ts_y_pred.values) ** 2))
+rmse_ri_vs_era5 = np.sqrt(np.nanmean((era5_obs_ts - ts_y_pred.values) ** 2))
+_rmse_ri_text = (
+    f"Daily RMSE (Pred ens mean vs ECMWF ens mean): {rmse_ri:.2f} °C\n"
+    f"Daily RMSE (Pred ens mean vs ERA5): {rmse_ri_vs_era5:.2f} °C"
+)
 ax_ts_ri.text(
-    0.02, 0.92, f"RMSE (ECMWF ens. mean vs predicted): {rmse_ri:.2f} °C",
-    transform=ax_ts_ri.transAxes, fontsize=16,
+    0.02, 0.95, _rmse_ri_text,
+    transform=ax_ts_ri.transAxes, fontsize=13, va="top", ha="left",
     bbox=dict(facecolor="white", alpha=0.8, edgecolor="gray"),
 )
 ax_ts_ri.set_title(
@@ -2004,7 +2115,7 @@ LABEL_MAP_B = {**LABEL_MAP,
 fig_corr_B, ax_corr_B = plt.subplots(figsize=(10, 8))
 _feats_B = pd.concat([
     pd.DataFrame({"T2max": y_final}),
-    schemeB_df[FACTOR_COLS_RES].reset_index(drop=True),
+    schemeB_df[_factor_cols_B_active].reset_index(drop=True),
 ], axis=1)
 _corr_B = _feats_B.corr()
 _clean_B = [LABEL_MAP_B.get(c, c).replace("\n", " ") for c in _corr_B.columns]
@@ -2034,14 +2145,15 @@ ax_B_scat.text(
     transform=ax_B_scat.transAxes, fontsize=14, va="top",
     bbox=dict(facecolor="white", alpha=0.7),
 )
-ax_B_scat.set_title("Scheme B: Predicted vs ECMWF T2max", fontsize=16, pad=15)
+ax_B_scat.set_title(f"Scheme B ({_scheme_b_label}): Predicted vs ECMWF T2max", fontsize=16, pad=15)
 ax_B_scat.set_xlabel("ECMWF T2max (°C)", fontsize=14)
 ax_B_scat.set_ylabel("Predicted T2max (°C)", fontsize=14)
 
+_n_B = len(_factor_cols_B_active)
 _sorted_B = lmg_B.sort_values("normRelaImpt", ascending=False).reset_index(drop=True)
 _disp_B = [LABEL_MAP_B.get(d, d) for d in _sorted_B["driver"]]
 _bars_B = ax_B_bar.bar(_disp_B, _sorted_B["normRelaImpt"], color="seagreen", alpha=0.75)
-ax_B_bar.set_title("Scheme B LMG Relative Importance (12 Factors)", fontsize=16, pad=15)
+ax_B_bar.set_title(f"Scheme B LMG Relative Importance ({_n_B} Factors)", fontsize=16, pad=15)
 ax_B_bar.set_ylabel("Normalized Relative Importance (%)", fontsize=14)
 ax_B_bar.set_xticks(range(len(_disp_B)))
 ax_B_bar.set_xticklabels(_disp_B, rotation=45, ha="right", fontsize=12)
@@ -2085,9 +2197,9 @@ _ts_SSR_res_B = apply_residual_transform(
 )
 _ts_SHF_res_B = apply_residual_transform(
     _ts_shf_daily,
-    np.column_stack([_ts_nchn_tp_daily, _ts_SM_res_B]),
+    np.column_stack([_ts_nchn_tp_daily, _ts_SM_res_B, _ts_SSR_res_B]),
     _B_shf_model,
-    ["NCHN_tp", "SM_residual"],
+    ["NCHN_tp", "SM_residual", "SSR_residual"],
 )
 
 ts_data_dict_B = {
@@ -2104,9 +2216,9 @@ ts_data_dict_B = {
     "ISM":              ts_data_dict["ISM"],
     "SST_Grad":         ts_data_dict["SST_Grad"],
 }
-ts_X_B = pd.DataFrame(ts_data_dict_B)[FACTOR_COLS_RES]
+ts_X_B = pd.DataFrame(ts_data_dict_B)[_factor_cols_B_active]
 ts_XB_scaled_arr = scaler_B.transform(ts_X_B)
-ts_XB_scaled     = pd.DataFrame(ts_XB_scaled_arr, columns=FACTOR_COLS_RES)
+ts_XB_scaled     = pd.DataFrame(ts_XB_scaled_arr, columns=_factor_cols_B_active)
 ts_XB_scaled_ols = sm_api.add_constant(ts_XB_scaled, has_constant="add")
 ts_y_pred_B      = model_B.predict(ts_XB_scaled_ols)
 
@@ -2136,9 +2248,9 @@ for _m in range(n_members):
     )
     _m_SHF_res = apply_residual_transform(
         _m_shf,
-        np.column_stack([_m_tp, _m_SM_res]),
+        np.column_stack([_m_tp, _m_SM_res, _m_SSR_res]),
         _B_shf_model,
-        ["NCHN_tp", "SM_residual"],
+        ["NCHN_tp", "SM_residual", "SSR_residual"],
     )
     _pm_SM_res_B_arr[_m]  = _m_SM_res
     _pm_SSR_res_B_arr[_m] = _m_SSR_res
@@ -2158,10 +2270,10 @@ for _m in range(n_members):
         "ISM":              np.repeat(ism_arr[_m], days_len),
         "SST_Grad":         np.repeat(sst_grad_arr[_m], days_len),
     }
-    _ts_X_m_B = pd.DataFrame(_member_dict_B)[FACTOR_COLS_RES]
+    _ts_X_m_B = pd.DataFrame(_member_dict_B)[_factor_cols_B_active]
     _ts_XB_m_arr = scaler_B.transform(_ts_X_m_B)
     _ts_XB_m_ols = sm_api.add_constant(
-        pd.DataFrame(_ts_XB_m_arr, columns=FACTOR_COLS_RES), has_constant="add"
+        pd.DataFrame(_ts_XB_m_arr, columns=_factor_cols_B_active), has_constant="add"
     )
     ts_member_preds_B[_m] = model_B.predict(_ts_XB_m_ols).values
 
@@ -2183,21 +2295,63 @@ ax_ts_B.plot(plot_dates, ts_y_pred_B.values, marker="s", linestyle="--",
              color="seagreen", lw=2.5, zorder=5,
              label="Scheme B Predicted $T_{max}$")
 _rmse_B = float(np.sqrt(np.nanmean((ts_y - ts_y_pred_B.values) ** 2)))
-# NEW: clarify RMSE label in time series plot
-ax_ts_B.text(0.02, 0.92, f"RMSE (ECMWF ens. mean vs Scheme B predicted): {_rmse_B:.2f} °C",
-             transform=ax_ts_B.transAxes, fontsize=16,
+_rmse_B_vs_era5 = float(np.sqrt(np.nanmean((era5_obs_ts - ts_y_pred_B.values) ** 2)))
+# NEW: clarify RMSE label in time series plot (Part 2)
+_rmse_B_text = (
+    f"Daily RMSE (Pred ens mean vs ECMWF ens mean): {_rmse_B:.2f} °C\n"
+    f"Daily RMSE (Pred ens mean vs ERA5): {_rmse_B_vs_era5:.2f} °C"
+)
+ax_ts_B.text(0.02, 0.95, _rmse_B_text,
+             transform=ax_ts_B.transAxes, fontsize=13, va="top", ha="left",
              bbox=dict(facecolor="white", alpha=0.8, edgecolor="gray"))
-ax_ts_B.set_title("Time Series Evolution (Scheme B, Hierarchical Residual Model)", fontsize=16, pad=15)
+ax_ts_B.set_title(f"Time Series Evolution ({_scheme_b_label})", fontsize=16, pad=15)
 ax_ts_B.set_ylabel("T2max (°C)", fontsize=14)
 ax_ts_B.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m-%d"))
 fig_ts_B.autofmt_xdate(rotation=30)
-ax_ts_B.legend(fontsize=12)
+ax_ts_B.legend(loc="lower right", fontsize=12)
 ax_ts_B.grid(True, linestyle=":", alpha=0.7)
 plt.tight_layout()
 _out_ts_B = f"{OUT_DIR}/1.s2s.fig_ts_LMG_{start_date}_SchemeB.png"
 plt.savefig(_out_ts_B, dpi=300, bbox_inches="tight")
 plt.show()
 print(f"Scheme B 时间序列图已保存至: {_out_ts_B}")
+
+# =============================================================================
+# NEW: RMSE Definition Check for Time-Series Figures
+# =============================================================================
+print("\n" + "=" * 60)
+print("NEW: RMSE Definition Check for Time-Series Figures")
+print("NOTE: performance_comparison_{}.csv RMSE = Train_RMSE_member_vs_ECMWF_member".format(start_date))
+print("      (Training-sample OLS fitted values vs ECMWF T2max ensemble members)")
+print("      Time-series figures show DIFFERENT quantities:")
+print("=" * 60)
+
+_rmse_train_member = perf_df[perf_df["model"] == "Raw"]["Train_RMSE_member_vs_ECMWF_member"].values[0]
+_rmse_daily_raw_vs_ecmwf = float(np.sqrt(np.nanmean((ts_y - ts_y_pred.values) ** 2)))
+_rmse_daily_raw_vs_era5  = float(np.sqrt(np.nanmean((era5_obs_ts - ts_y_pred.values) ** 2)))
+_rmse_daily_B_vs_ecmwf   = float(np.sqrt(np.nanmean((ts_y - ts_y_pred_B.values) ** 2)))
+_rmse_daily_B_vs_era5    = float(np.sqrt(np.nanmean((era5_obs_ts - ts_y_pred_B.values) ** 2)))
+
+print(f"  [Raw model] Train_RMSE_member_vs_ECMWF_member: {_rmse_train_member:.4f} °C")
+print(f"  [Raw model] Daily RMSE (Pred ens mean vs ECMWF ens mean): {_rmse_daily_raw_vs_ecmwf:.4f} °C")
+print(f"  [Raw model] Daily RMSE (Pred ens mean vs ERA5):           {_rmse_daily_raw_vs_era5:.4f} °C")
+print(f"  [Scheme B]  Daily RMSE (Pred ens mean vs ECMWF ens mean): {_rmse_daily_B_vs_ecmwf:.4f} °C")
+print(f"  [Scheme B]  Daily RMSE (Pred ens mean vs ERA5):           {_rmse_daily_B_vs_era5:.4f} °C")
+print(f"  => Train_RMSE_member ({_rmse_train_member:.4f} °C) vs Daily ensemble-mean RMSE ({_rmse_daily_raw_vs_ecmwf:.4f} °C) — these are DIFFERENT quantities.")
+_rmse_def_df = pd.DataFrame([
+    {"model": "Raw", "metric": "Train_RMSE_member_vs_ECMWF_member", "value": _rmse_train_member,
+     "definition": "OLS fitted vs ECMWF T2max member (training sample)"},
+    {"model": "Raw", "metric": "Daily_RMSE_pred_vs_ECMWF_mean",    "value": round(_rmse_daily_raw_vs_ecmwf, 4),
+     "definition": "Predicted ensemble mean vs ECMWF ensemble mean (daily)"},
+    {"model": "Raw", "metric": "Daily_RMSE_pred_vs_ERA5",           "value": round(_rmse_daily_raw_vs_era5,  4),
+     "definition": "Predicted ensemble mean vs ERA5 observation (daily)"},
+    {"model": "SchemeB", "metric": "Daily_RMSE_pred_vs_ECMWF_mean", "value": round(_rmse_daily_B_vs_ecmwf, 4),
+     "definition": "Predicted ensemble mean vs ECMWF ensemble mean (daily)"},
+    {"model": "SchemeB", "metric": "Daily_RMSE_pred_vs_ERA5",        "value": round(_rmse_daily_B_vs_era5,  4),
+     "definition": "Predicted ensemble mean vs ERA5 observation (daily)"},
+])
+_rmse_def_df.to_csv(f"{OUT_DIR}/rmse_definition_check_{start_date}.csv", index=False)
+print(f"  RMSE definition check saved to {OUT_DIR}/rmse_definition_check_{start_date}.csv")
 
 # =============================================================================
 # NEW: Section 13 — Scheme B Residual Comparison Time Series (3×1 subplot)
