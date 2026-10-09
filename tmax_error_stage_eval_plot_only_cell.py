@@ -503,17 +503,17 @@ def _draw_grouped_stage_bars(ax, metric_values, metric):
                 ha="right", va="bottom", fontsize=FONT_PANEL_TITLE, color="0.20")
 
     # Estimate label widths without drawing; stagger nearby same-sign endpoints
-    # in points, then reserve vertical room for the largest possible offset.
+    # in points; reserve room only for the offsets actually assigned below.
     axis_position = ax.get_position()
     axis_height_pt = axis_position.height * ax.figure.get_figheight() * 72
     axis_width_pt = axis_position.width * ax.figure.get_figwidth() * 72
     x_span = group_centers[-1] - group_centers[0] + 1.04
-    max_offset_pt = BAR_VALUE_BASE_OFFSET_PT + len(INIT_ORDER) * BAR_VALUE_STAGGER_PT
     lower_limit, upper_limit = ax.get_ylim()
-    reserve_fraction = min(0.35, (max_offset_pt + FONT_BAR_VALUE + 2) / axis_height_pt)
-    padding = (upper_limit - lower_limit) * reserve_fraction / (1 - 2 * reserve_fraction)
-    ax.set_ylim(lower_limit - (padding if metric != "rmse" else 0), upper_limit + padding)
-    value_span = ax.get_ylim()[1] - ax.get_ylim()[0]
+    value_span = upper_limit - lower_limit
+    label_height_pt = FONT_BAR_VALUE * 1.2 + 2 * 0.08 * FONT_BAR_VALUE
+    edge_clearance_pt = 2.0
+    stagger_step_pt = min(BAR_VALUE_STAGGER_PT, 0.12 * axis_height_pt)
+    offset_cap_pt = max(BAR_VALUE_BASE_OFFSET_PT, 0.28 * axis_height_pt)
     label_offsets = {}
     for stage in stage_order:
         placed = []
@@ -532,9 +532,29 @@ def _draw_grouped_stage_bars(ax, metric_values, metric):
                               and abs(endpoint_pt - item[2]) < BAR_VALUE_CLOSE_PT]
                 if not collisions:
                     break
-                offset_pt += BAR_VALUE_STAGGER_PT
+                next_offset_pt = min(offset_pt + stagger_step_pt, offset_cap_pt)
+                if next_offset_pt == offset_pt:
+                    break
+                offset_pt = next_offset_pt
             label_offsets[(stage, init)] = offset_pt
             placed.append((direction, x_pt, y_pt + direction * offset_pt, width_pt))
+    # Solve the upper/lower endpoint constraints using actual offsets and the
+    # estimated text height (including the compact background). Expanding one
+    # end changes the points-to-data scale, so update the coupled limits until
+    # stable. RMSE keeps its zero lower bound; Bias expands each sign separately.
+    for _ in range(64):
+        previous_lower, previous_upper = lower_limit, upper_limit
+        for stage in stage_order:
+            for init in INIT_ORDER:
+                value = metric_values[(stage, init)]
+                fraction = (label_offsets[(stage, init)] + label_height_pt + edge_clearance_pt) / axis_height_pt
+                if value >= 0:
+                    upper_limit = max(upper_limit, (value - fraction * lower_limit) / (1 - fraction))
+                elif metric != "rmse":
+                    lower_limit = min(lower_limit, (value - fraction * upper_limit) / (1 - fraction))
+        if max(abs(lower_limit - previous_lower), abs(upper_limit - previous_upper)) < 1e-10:
+            break
+    ax.set_ylim(lower_limit, upper_limit)
     for init_index, init in enumerate(INIT_ORDER):
         positions = group_centers + offsets[init_index]
         values = np.array([metric_values[(stage, init)] for stage in stage_order], dtype=float)
@@ -1003,7 +1023,8 @@ def _write_merged_fig2_qc(path, result):
         "bar_value_style": "black bold; compact white square background, pad=0.08; no border or shadow",
         "bar_value_offset_strategy": "point offsets outside signed endpoints; estimated text-width and same-sign endpoint proximity staggering",
         "bar_value_offset_points": f"base={BAR_VALUE_BASE_OFFSET_PT}; stagger={BAR_VALUE_STAGGER_PT}; proximity={BAR_VALUE_CLOSE_PT}",
-        "bar_value_axis_padding": "reserve vertical space for maximum point offset and label height",
+        "bar_value_axis_padding": "actual assigned offsets plus estimated text/background height and 2-pt clearance; RMSE upper end only; Bias positive/negative ends separately",
+        "bar_value_stagger_height_control": "step <= 12% of axis height; offset cap 28% of axis height",
         "member_rmse_ylabel": "single RMSE (°C), vertically centered left of both boxplot rows",
         "diamond_legend_location": "dedicated inter-row axis, below Stage-I date labels and above Total",
         "diamond_legend_font_pt": FONT_DIAMOND_LEGEND,
