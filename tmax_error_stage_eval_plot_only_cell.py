@@ -499,8 +499,6 @@ def _draw_grouped_stage_bars(ax, metric_values, metric):
         ax.set_ylim(lower - 0.20 * span, upper + 0.16 * span)
         ax.axhline(0, color="0.18", lw=0.9)
         ax.set_ylabel("Bias (°C)", fontsize=FONT_AXIS_LABEL)
-        ax.text(0.985, 1.025, "Bias", transform=ax.transAxes,
-                ha="right", va="bottom", fontsize=FONT_PANEL_TITLE, color="0.20")
 
     # Estimate label widths without drawing; stagger nearby same-sign endpoints
     # in points; reserve room only for the offsets actually assigned below.
@@ -777,7 +775,7 @@ def render_merged_fig2_from_csv(
         _draw_grouped_stage_bars(ax_bias_bar, bias_metrics, "bias")
         ax_rmse_bar.tick_params(axis="x", labelbottom=True)
         ax_bias_bar.tick_params(axis="x", labelbottom=True)
-        _add_panel_heading(ax_rmse_bar, "b", "Ensemble-mean error metrics")
+        _add_panel_heading(ax_rmse_bar, "b", "Ensemble-mean metrics")
 
         _draw_member_rmse_boxes(
             ax_box_stage1, member_df, stage_df, "Stage-I", member_y_upper, seed=20240612,
