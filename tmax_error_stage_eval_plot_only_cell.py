@@ -84,6 +84,8 @@ FONT_AXIS_LABEL = 9.5
 FONT_TICK = 8.7
 FONT_LEGEND = 8.4
 FONT_ANNOTATION = 8.3
+FONT_BAR_VALUE = 8.0
+BAR_VALUE_ROTATION = 0
 BIAS_COLOR = "#5B8FD9"
 RMSE_COLOR = "#80B36A"
 BAR_ALPHA = 0.86
@@ -423,8 +425,10 @@ def _write_fig2_caption(path):
         "period (14–24 June). (c) Member-wise RMSE distributions for Stage-I (upper) and the "
         "Total period (lower) for the same initialization dates. All daily quantities follow "
         "the upstream Beijing-time (UTC+8) processing. Each box contains n = 51 member RMSE "
-        "values; boxes span the 25th–75th percentiles, center lines denote medians, whiskers "
-        "extend to 1.5 times the interquartile range, and gray points show all members. Black "
+        "values; boxes span the 25th–75th percentiles, center lines denote medians. "
+        "Whiskers extend to the most extreme observations within 1.5 interquartile ranges "
+        "below the first quartile and above the third quartile. "
+        "Gray points show all members. Black "
         "diamonds denote the RMSE of the ensemble-mean forecast, calculated after first taking "
         "the daily mean across the 51 members, rather than the mean or median of member-wise RMSE."
     )
@@ -470,7 +474,7 @@ def _stage_metric_lookup(stage_df, metric):
     return values
 
 
-def _draw_grouped_stage_bars(ax, metric_values, metric, show_stage_labels):
+def _draw_grouped_stage_bars(ax, metric_values, metric):
     stage_order = ["Stage-I", "Total"]
     group_centers = np.array([0.0, 1.25])
     bar_width = 0.16
@@ -510,13 +514,13 @@ def _draw_grouped_stage_bars(ax, metric_values, metric, show_stage_labels):
                 text,
                 ha="center",
                 va="bottom" if value >= 0 else "top",
-                fontsize=6.7,
-                rotation=90,
+                fontsize=FONT_BAR_VALUE,
+                rotation=BAR_VALUE_ROTATION,
                 zorder=5,
             )
     ax.set_xlim(group_centers[0] - 0.52, group_centers[-1] + 0.52)
     ax.set_xticks(group_centers)
-    ax.set_xticklabels(stage_order if show_stage_labels else [])
+    ax.set_xticklabels(stage_order)
     ax.tick_params(axis="x", which="both", length=0)
     _apply_axis_style(ax, grid_axis="y")
 
@@ -675,8 +679,10 @@ def render_merged_fig2_from_csv(
             handlelength=1.25, columnspacing=1.0, handletextpad=0.4,
         )
 
-        _draw_grouped_stage_bars(ax_rmse_bar, rmse_metrics, "rmse", show_stage_labels=False)
-        _draw_grouped_stage_bars(ax_bias_bar, bias_metrics, "bias", show_stage_labels=True)
+        _draw_grouped_stage_bars(ax_rmse_bar, rmse_metrics, "rmse")
+        _draw_grouped_stage_bars(ax_bias_bar, bias_metrics, "bias")
+        ax_rmse_bar.tick_params(axis="x", labelbottom=False)
+        ax_bias_bar.tick_params(axis="x", labelbottom=True)
         _add_panel_heading(ax_rmse_bar, "b", "Ensemble-mean error metrics")
 
         _draw_member_rmse_boxes(
@@ -942,6 +948,7 @@ def _write_merged_fig2_qc(path, result):
         "black_diamond_definition": "RMSE of ensemble-mean forecast",
         "validation_tolerance_C": "atol=1e-6, rtol=0",
         "visual_collision_check": "manual check required after rendering",
+        "bar_value_label_qc": "inspect bar-label spacing and possible overlaps after the first actual rendering",
     }
     for row in validation_df.itertuples(index=False):
         prefix = f"{row.init}|{row.stage}"
