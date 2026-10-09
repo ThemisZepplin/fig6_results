@@ -509,50 +509,82 @@ def _draw_grouped_stage_bars(ax, metric_values, metric):
     axis_width_pt = axis_position.width * ax.figure.get_figwidth() * 72
     x_span = group_centers[-1] - group_centers[0] + 1.04
     lower_limit, upper_limit = ax.get_ylim()
-    value_span = upper_limit - lower_limit
     label_height_pt = FONT_BAR_VALUE * 1.2 + 2 * 0.08 * FONT_BAR_VALUE
     edge_clearance_pt = 2.0
-    stagger_step_pt = min(BAR_VALUE_STAGGER_PT, 0.12 * axis_height_pt)
-    offset_cap_pt = max(BAR_VALUE_BASE_OFFSET_PT, 0.28 * axis_height_pt)
-    label_offsets = {}
-    for stage in stage_order:
-        placed = []
-        for init_index, init in enumerate(INIT_ORDER):
+    # Exactly two offsets: near the endpoint, or one text-height farther out.
+    # The extra offset follows the axis height, without accumulating steps.
+    extra_offset_pt = min(BAR_VALUE_STAGGER_PT, 0.16 * axis_height_pt)
+    extra_offset_pt = max(label_height_pt + 1.0, extra_offset_pt)
+    baseline_lower, baseline_upper = lower_limit, upper_limit
+
+    def _choose_group_offsets(stage, low, high):
+        labels = []
+        for index, init in enumerate(INIT_ORDER):
             value = metric_values[(stage, init)]
             text = f"{value:.2f}" if metric == "rmse" else _format_signed_without_plus(value)
             direction = 1 if value >= 0 else -1
-            width_pt = len(text) * FONT_BAR_VALUE * 0.60
-            x_pt = offsets[init_index] * axis_width_pt / x_span
-            y_pt = value * axis_height_pt / value_span
-            offset_pt = BAR_VALUE_BASE_OFFSET_PT
-            for _ in INIT_ORDER:
-                endpoint_pt = y_pt + direction * offset_pt
-                collisions = [item for item in placed if item[0] == direction
-                              and abs(x_pt - item[1]) < (width_pt + item[3]) / 2 + 2
-                              and abs(endpoint_pt - item[2]) < BAR_VALUE_CLOSE_PT]
-                if not collisions:
-                    break
-                next_offset_pt = min(offset_pt + stagger_step_pt, offset_cap_pt)
-                if next_offset_pt == offset_pt:
-                    break
-                offset_pt = next_offset_pt
-            label_offsets[(stage, init)] = offset_pt
-            placed.append((direction, x_pt, y_pt + direction * offset_pt, width_pt))
-    # Solve the upper/lower endpoint constraints using actual offsets and the
-    # estimated text height (including the compact background). Expanding one
-    # end changes the points-to-data scale, so update the coupled limits until
-    # stable. RMSE keeps its zero lower bound; Bias expands each sign separately.
-    for _ in range(64):
-        previous_lower, previous_upper = lower_limit, upper_limit
-        for stage in stage_order:
-            for init in INIT_ORDER:
-                value = metric_values[(stage, init)]
-                fraction = (label_offsets[(stage, init)] + label_height_pt + edge_clearance_pt) / axis_height_pt
-                if value >= 0:
-                    upper_limit = max(upper_limit, (value - fraction * lower_limit) / (1 - fraction))
-                elif metric != "rmse":
-                    lower_limit = min(lower_limit, (value - fraction * upper_limit) / (1 - fraction))
-        if max(abs(lower_limit - previous_lower), abs(upper_limit - previous_upper)) < 1e-10:
+            width = len(text) * FONT_BAR_VALUE * 0.60 + 2 * 0.08 * FONT_BAR_VALUE
+            labels.append((value, direction, width, offsets[index] * axis_width_pt / x_span))
+
+        def rectangles(mask):
+            boxes = []
+            for index, (value, direction, width, x) in enumerate(labels):
+                offset = BAR_VALUE_BASE_OFFSET_PT + (extra_offset_pt if mask & (1 << index) else 0)
+                endpoint = (value - low) * axis_height_pt / (high - low) + direction * offset
+                bottom = endpoint if direction > 0 else endpoint - label_height_pt
+                boxes.append((x - width / 2, x + width / 2, bottom, bottom + label_height_pt))
+            return boxes
+
+        def conflicts(boxes):
+            pairs = []
+            for index in range(len(boxes) - 1):
+                # Only neighboring initialization labels can trigger staggering.
+                a, b = boxes[index], boxes[index + 1]
+                width = min(a[1], b[1]) - max(a[0], b[0]) + 1.0
+                height = min(a[3], b[3]) - max(a[2], b[2]) + 1.0
+                if width > 0 and height > 0:
+                    pairs.append((index, index + 1, width * height))
+            return pairs
+
+        eligible = set()
+        for first, second, _ in conflicts(rectangles(0)):
+            eligible.update((first, second))
+        candidates = []
+        for mask in range(1 << len(labels)):
+            if any(mask & (1 << index) and index not in eligible for index in range(len(labels))):
+                continue
+            collisions = conflicts(rectangles(mask))
+            # Consider all four together: minimize conflicts, then extra offsets.
+            score = (len(collisions), sum(item[2] for item in collisions), bin(mask).count("1"), mask)
+            candidates.append((score, mask))
+        mask = min(candidates)[1]
+        return {init: BAR_VALUE_BASE_OFFSET_PT + (extra_offset_pt if mask & (1 << index) else 0)
+                for index, init in enumerate(INIT_ORDER)}
+
+    label_offsets = {}
+    # Re-select the best two-tier assignment after changing the points/data
+    # scale. Both loops are bounded; final visual inspection remains necessary.
+    for _ in range(12):
+        selected = {(stage, init): offset for stage in stage_order
+                    for init, offset in _choose_group_offsets(stage, lower_limit, upper_limit).items()}
+        new_lower, new_upper = baseline_lower, baseline_upper
+        for _ in range(64):
+            previous_lower, previous_upper = new_lower, new_upper
+            for stage in stage_order:
+                for init in INIT_ORDER:
+                    value = metric_values[(stage, init)]
+                    fraction = (selected[(stage, init)] + label_height_pt + edge_clearance_pt) / axis_height_pt
+                    if value >= 0:
+                        new_upper = max(new_upper, (value - fraction * new_lower) / (1 - fraction))
+                    elif metric != "rmse":
+                        new_lower = min(new_lower, (value - fraction * new_upper) / (1 - fraction))
+            if max(abs(new_lower - previous_lower), abs(new_upper - previous_upper)) < 1e-10:
+                break
+        label_offsets = selected
+        lower_limit, upper_limit = new_lower, new_upper
+        final_selection = {(stage, init): offset for stage in stage_order
+                           for init, offset in _choose_group_offsets(stage, lower_limit, upper_limit).items()}
+        if final_selection == selected:
             break
     ax.set_ylim(lower_limit, upper_limit)
     for init_index, init in enumerate(INIT_ORDER):
@@ -1021,10 +1053,10 @@ def _write_merged_fig2_qc(path, result):
         "bar_value_font_pt": FONT_BAR_VALUE,
         "bar_value_rotation": BAR_VALUE_ROTATION,
         "bar_value_style": "black bold; compact white square background, pad=0.08; no border or shadow",
-        "bar_value_offset_strategy": "point offsets outside signed endpoints; estimated text-width and same-sign endpoint proximity staggering",
-        "bar_value_offset_points": f"base={BAR_VALUE_BASE_OFFSET_PT}; stagger={BAR_VALUE_STAGGER_PT}; proximity={BAR_VALUE_CLOSE_PT}",
+        "bar_value_offset_strategy": "two-tier point offsets outside signed endpoints; jointly select among 16 group assignments using estimated text/background rectangles; recheck after axis padding (12 iterations maximum)",
+        "bar_value_offset_points": f"base={BAR_VALUE_BASE_OFFSET_PT}; one extra offset uses configured stagger={BAR_VALUE_STAGGER_PT}, axis height and text height",
         "bar_value_axis_padding": "actual assigned offsets plus estimated text/background height and 2-pt clearance; RMSE upper end only; Bias positive/negative ends separately",
-        "bar_value_stagger_height_control": "step <= 12% of axis height; offset cap 28% of axis height",
+        "bar_value_stagger_height_control": "one extra offset scaled to axis height and estimated text/background height; no accumulated staircase",
         "member_rmse_ylabel": "single RMSE (°C), vertically centered left of both boxplot rows",
         "diamond_legend_location": "dedicated inter-row axis, below Stage-I date labels and above Total",
         "diamond_legend_font_pt": FONT_DIAMOND_LEGEND,
