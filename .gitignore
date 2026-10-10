@@ -1,0 +1,4 @@
+__pycache__/
+.pytest_cache/
+work/
+mlr_raw_residual_comparison/

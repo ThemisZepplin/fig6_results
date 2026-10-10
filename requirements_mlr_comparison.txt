@@ -1,0 +1,11 @@
+numpy>=1.24
+pandas>=2.0
+scipy>=1.10
+scikit-learn>=1.2
+statsmodels>=0.14
+matplotlib>=3.7
+nbformat>=5.9
+pytest>=7
+nbclient>=0.9
+ipykernel>=6
+# Jupyter Notebook/JupyterLab provides the HPC user interface.
