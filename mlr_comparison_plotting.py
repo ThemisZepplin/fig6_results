@@ -150,10 +150,14 @@ def importance_figure(data, plan, window, version):
             ax.set_yticks(np.arange(6), [LABELS[n] for n in g.predictor], fontsize=7.0)
             ax.invert_yaxis()
             ax.set_xlim(0, plan['bars'][method])
-            ax.xaxis.set_major_locator(MaxNLocator(nbins=3))
-            ax.tick_params(axis='x', labelsize=7.0)
             ax.set_title(f'({chr(97+row*4+col)}) {pd.Timestamp(init).day} Jun', loc='left', fontsize=8.5, pad=5)
             _base(ax, bars=True)
+            # Bar labels carry exact percentages; retain the shared internal scale.
+            ax.set_xticks([])
+            ax.set_xticks([], minor=True)
+            ax.tick_params(axis='x', which='both', bottom=False, top=False,
+                           labelbottom=False, labeltop=False)
+            ax.grid(False, axis='x', which='both')
             for y, v in enumerate(vals):
                 t = ax.text(v, y, f'{v:.1f}%', va='center', ha='left', color='black',
                             fontweight='bold', fontsize=7.0)

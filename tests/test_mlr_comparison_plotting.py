@@ -33,6 +33,21 @@ def test_rendered_layout_axes_and_exports(render_input):
     built = plotting.make_figures(data, plan, 'scatter') + plotting.make_figures(data, plan, 'importance')
     for item in built:
         assert item['qc']['status'] == 'PASS', item['qc']
+        if item['qc']['figure'] in ('Fig4', 'Fig10'):
+            axes = item['fig'].axes
+            assert len(axes) == 12
+            for index, ax in enumerate(axes):
+                method = core.METHODS[index // 4]
+                assert ax.get_xlim() == (0, plan['bars'][method])
+                assert len(ax.get_xticks()) == len(ax.get_xticks(minor=True)) == 0
+                assert not ax.get_xticklabels() and not ax.get_xticklabels(minor=True)
+                assert not any(t.get_visible() for t in ax.xaxis.get_ticklines())
+                assert not any(g.get_visible() for g in ax.get_xgridlines())
+                assert len(ax.get_yticklabels()) == 6
+                assert len(ax.texts) == 6
+                assert all(t.get_color() == 'black' and t.get_fontweight() == 'bold'
+                           for t in ax.texts)
+            assert item['qc']['value_labels_outside_axes'] == []
     manifest = plotting.save_figures(built, inp, out)
     assert len(manifest) == 8
     assert (manifest.png_width_px == 3900).all()
@@ -64,4 +79,5 @@ def test_short_and_zero_bars_keep_true_lengths(render_input):
     widths = sorted(p.get_width() for p in ax.patches)
     np.testing.assert_allclose(widths, [0, 0.01, 0.05, 1, 48.94, 50])
     assert {'0.0%', '0.1%'} <= {t.get_text() for t in ax.texts}
+    assert plotting.layout_qc(fig, axes, labels)['value_labels_outside_axes'] == []
     plotting.plt.close(fig)
