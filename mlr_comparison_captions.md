@@ -25,8 +25,11 @@ checked against full-model R². LOFO deletes one fixed full-model column at a ti
 and normalizes positive full-minus-reduced R² across factors. LOFO percentages
 are not LMG contributions; the three percentage definitions are not equivalent
 variance decompositions. Johnson and LOFO provide supplementary robustness
-diagnostics. All rows and both versions share each column’s residualized LMG
-position order. Bold one-decimal labels are visual emphasis, not significance.
+diagnostics. For each window, predictor positions are fixed according to the descending LMG importance in the 12 June 2023 residualized model and retained across all initialization dates, methods, and raw/residualized counterparts.
+The Total order is TP, Z500, NCVI, TCC resid, Init MSE*, SM resid; raw counterparts
+retain these positions. Factor names appear in the first column of each row only.
+Exact one-decimal percentages replace x-axis ticks; common internal method scales
+remain unchanged. Bold labels are visual emphasis, not significance.
 Raw versus residualized labels distinguish original SM/TCC from SM resid/TCC resid.
 TP is window-accumulated North China precipitation; SM is mean soil moisture;
 TCC is mean total cloud cover; Z500 is the North China 500-hPa geopotential-height
@@ -49,7 +52,12 @@ As in Figure 4 for Stage-I (14–17 June 2023, inclusive BJT), with 51 ECMWF
 members, window-mean absolute Tmax as response, and initializations on 1, 5, 8
 and 12 June. Rows display LMG (primary indicator, green), Johnson relative weights
 (blue) and normalized positive LOFO ΔR² (orange). Raw and residualized versions
-use the same predictor positions and each column’s residualized LMG display order.
+use the same predictor positions.
+For each window, predictor positions are fixed according to the descending LMG importance in the 12 June 2023 residualized model and retained across all initialization dates, methods, and raw/residualized counterparts.
+The Stage-I order is SHF resid, SM, Z500, Init MSE*, NCVI, TCC resid; raw SHF/TCC
+names replace residualized labels at the same positions. Factor labels appear only
+in the first column of each row; percentage annotations replace x-axis ticks while
+preserving the common method scales.
 SHF denotes window-mean sensible heat flux; SHF resid and TCC resid are the
 parts remaining after intercept regression on SM. Remaining abbreviations follow
 Figure 4. LMG averages positive incremental R² across the common 2000-permutation

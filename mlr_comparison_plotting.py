@@ -22,6 +22,32 @@ STYLE = {"font.family": "sans-serif", "font.sans-serif": ["Arial", "DejaVu Sans"
          "axes.linewidth": 0.8, "xtick.labelsize": 8.5, "ytick.labelsize": 8.5,
          "axes.labelsize": 9.5, "axes.titlesize": 9.5}
 FIGURE_IDS = {"Total": (3, 4, "Total"), "Stage-I": (9, 10, "StageI")}
+IMPORTANCE_REFERENCE_ORDER = {
+    'Total': ('NCHN_tp', 'z500_anom_NCHN', 'NCVI_concurrent', 'TCC_resid',
+              'Initial_MSEstar_max_NCHN', 'SM_resid'),
+    'Stage-I': ('SHF_resid', 'sm_avg', 'z500_anom_NCHN',
+                'Initial_MSEstar_max_NCHN', 'NCVI_concurrent', 'TCC_resid'),
+}
+
+
+def importance_order(data, window):
+    """Derive the 12 June order from CSV values; reject an unexpected reference."""
+    g = data['importance']
+    g = g[(g.init_date == '2023-06-12') & (g.window == window) &
+          (g.version == 'residualized') & (g.method == 'LMG')].copy()
+    canonical = predictors(window, 'residualized')
+    if (len(g) != 6 or g.position.duplicated().any() or
+            g.sort_values('position').predictor.tolist() != canonical or
+            g.sort_values('position').position.tolist() != list(range(1, 7)) or
+            not np.isfinite(g.importance_pct).all()):
+        raise ValueError(f'Invalid 12 June residualized LMG reference for {window}')
+    ordered = g.sort_values(['importance_pct', 'position'], ascending=[False, True], kind='stable')
+    observed = tuple(ordered.predictor)
+    if observed != IMPORTANCE_REFERENCE_ORDER[window]:
+        raise ValueError(f'12 June residualized LMG order mismatch for {window}: '
+                         f'observed={observed}; expected={IMPORTANCE_REFERENCE_ORDER[window]}. '
+                         'Check the genuine CSV; no fallback sorting is permitted.')
+    return ordered.position.astype(int).tolist()
 
 
 def load_results(output_root):
@@ -87,11 +113,10 @@ def figure_plan(data):
     bars = {m: max(float(data['importance'].loc[data['importance'].method == m, 'importance_pct'].max()) * 1.55, 10.0)
             for m in METHODS}
     order = {}
-    for init in INITS:
-        for w in WINDOWS:
-            g = data['importance']
-            g = g[(g.init_date == init) & (g.window == w) & (g.version == 'residualized') & (g.method == 'LMG')]
-            order[(init, w)] = g.sort_values(['importance_pct', 'position'], ascending=[False, True], kind='stable').position.tolist()
+    for w in WINDOWS:
+        reference = importance_order(data, w)
+        for init in INITS:
+            order[(init, w)] = reference.copy()
     return {'scatter': scatter, 'bars': bars, 'order': order}
 
 
@@ -132,26 +157,36 @@ def scatter_figure(data, plan, window, version):
 
 
 def importance_figure(data, plan, window, version):
-    fig = plt.figure(figsize=(WIDTH, 8.4), dpi=DPI)
+    order = importance_order(data, window)
+    if any(plan['order'][(init, window)] != order for init in INITS):
+        raise ValueError(f'Importance plan does not retain the fixed reference positions for {window}')
+    fig = plt.figure(figsize=(WIDTH, 8.1), dpi=DPI)
+    grid = fig.add_gridspec(3, 4, left=0.145, right=0.985, bottom=0.09,
+                          top=0.92, wspace=0.19, hspace=0.60)
     axes, value_texts = [], []
     row_headers = ('LMG relative importance (%)', 'Johnson relative weights (%)',
                    'Normalized positive ΔR² (%)')
-    row_bottoms = (0.69, 0.395, 0.10)
     for row, method in enumerate(METHODS):
-        y0 = row_bottoms[row]
-        fig.text(0.54, y0 + 0.258, row_headers[row], ha='center', va='center', fontsize=9.0)
         for col, init in enumerate(INITS):
-            ax = fig.add_axes([0.115 + col * 0.245, y0, 0.13, 0.225])
+            ax = fig.add_subplot(grid[row, col])
+            if col == 0:
+                fig.text(0.565, ax.get_position().y1 + 0.052, row_headers[row],
+                         ha='center', va='center', fontsize=10.0)
             g = data['importance']
             g = g[(g.init_date == init) & (g.window == window) & (g.version == version) & (g.method == method)].set_index('position')
-            g = g.loc[plan['order'][(init, window)]]
+            g = g.loc[order]
             vals = g.importance_pct.to_numpy()
             ax.barh(np.arange(6), vals, color=COLORS[method], alpha=0.88, height=0.66)
-            ax.set_yticks(np.arange(6), [LABELS[n] for n in g.predictor], fontsize=7.0)
+            ax.set_yticks(np.arange(6), [LABELS[n] for n in g.predictor], fontsize=8.0)
+            ax.tick_params(axis='y', which='both', left=False, right=False, labelleft=(col == 0))
             ax.invert_yaxis()
             ax.set_xlim(0, plan['bars'][method])
-            ax.set_title(f'({chr(97+row*4+col)}) {pd.Timestamp(init).day} Jun', loc='left', fontsize=8.5, pad=5)
+            ax.set_title(f'({chr(97+row*4+col)}) {pd.Timestamp(init).day} Jun', loc='left', fontsize=9.0, pad=7)
             _base(ax, bars=True)
+            for side in ('top', 'right', 'bottom'):
+                ax.spines[side].set_visible(False)
+            ax.spines['left'].set_color('0.80')
+            ax.spines['left'].set_linewidth(0.6)
             # Bar labels carry exact percentages; retain the shared internal scale.
             ax.set_xticks([])
             ax.set_xticks([], minor=True)
@@ -160,21 +195,23 @@ def importance_figure(data, plan, window, version):
             ax.grid(False, axis='x', which='both')
             for y, v in enumerate(vals):
                 t = ax.text(v, y, f'{v:.1f}%', va='center', ha='left', color='black',
-                            fontweight='bold', fontsize=7.0)
+                            fontweight='bold', fontsize=8.0)
                 value_texts.append((ax, t, float(v), y))
             axes.append(ax)
     fig.canvas.draw()
     renderer = fig.canvas.get_renderer()
-    # Measure actual rendered widths; place inside only if the bar can hold text.
+    # Prefer outside endpoints; use a small white backing only for inside fallbacks.
     for ax, t, v, y in value_texts:
         text_width = t.get_window_extent(renderer).width
-        zero_px = ax.transData.transform((0, y))[0]
         end_px = ax.transData.transform((v, y))[0]
-        pad_px = fig.dpi / 72 * 1.8
-        inside = v > 0 and end_px - zero_px >= text_width + 2 * pad_px
+        pad_px = fig.dpi / 72 * 2.0
+        inside = end_px + pad_px + text_width > ax.get_window_extent(renderer).x1
         label_px = end_px - pad_px if inside else end_px + pad_px
         xpos = ax.transData.inverted().transform((label_px, ax.transData.transform((0, y))[1]))[0]
         t.set_x(xpos); t.set_ha('right' if inside else 'left')
+        if inside:
+            t.set_bbox(dict(facecolor='white', edgecolor='none', alpha=0.95,
+                            boxstyle='round,pad=0.12'))
     fig.canvas.draw()
     return fig, axes, [t for _, t, _, _ in value_texts]
 
@@ -210,6 +247,65 @@ def layout_qc(fig, axes, values):
             'manual_review': 'Inspect genuine HPC figures for text/data occlusion; extent checks do not establish scientific visual adequacy.'}
 
 
+def importance_alignment_qc(fig, axes):
+    """Measure grid edges, repeated gaps and title anchors at final size (1.5 pt)."""
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    boxes = np.array([a.get_window_extent(renderer).extents for a in axes]) * 72 / fig.dpi
+    titles = np.array([a._left_title.get_window_extent(renderer).extents for a in axes]) * 72 / fig.dpi
+    widths, heights = boxes[:, 2] - boxes[:, 0], boxes[:, 3] - boxes[:, 1]
+    deviations = [np.ptp(widths), np.ptp(heights)]
+    for row in range(3):
+        b, t = boxes[row*4:row*4+4], titles[row*4:row*4+4]
+        deviations += [np.ptp(b[:, 1]), np.ptp(b[:, 3]),
+                       np.ptp(b[1:, 0] - b[:-1, 2]), np.ptp(t[:, 1]),
+                       np.ptp(t[:, 0] - b[:, 0])]
+    for col in range(4):
+        b = boxes[col::4]
+        deviations += [np.ptp(b[:, 0]), np.ptp(b[:, 2]),
+                       np.ptp(b[:-1, 1] - b[1:, 3])]
+    maximum = float(max(deviations))
+    return {'alignment_tolerance_pt': 1.5, 'alignment_max_deviation_pt': maximum,
+            'measured_axes_width_inches': (widths / 72).tolist(),
+            'alignment_status': 'PASS' if maximum <= 1.5 else 'FAIL'}
+
+
+def pdf_importance_qc(path):
+    """Audit exported vector text/font size and collisions, not source rcParams."""
+    try:
+        import fitz
+    except ImportError as exc:
+        raise RuntimeError('Layout v2 PDF QA requires PyMuPDF: pip install pymupdf') from exc
+    with fitz.open(path) as doc:
+        page = doc[0]
+        lines, sizes = [], []
+        for block in page.get_text('dict')['blocks']:
+            for line in block.get('lines', []):
+                text = ''.join(s['text'] for s in line['spans'])
+                if text.strip():
+                    lines.append((text, fitz.Rect(line['bbox'])))
+                    sizes.extend(s['size'] for s in line['spans'] if s['text'].strip())
+        collisions = []
+        clipped = []
+        for index, (text, rect) in enumerate(lines):
+            if not page.rect.contains(rect):
+                clipped.append(text)
+            for other, box in lines[index+1:]:
+                overlap = rect & box
+                if overlap.width > 0.3 and overlap.height > 0.3:
+                    collisions.append([text, other])
+        fonts = page.get_fonts(full=True)
+        embedded = all(bool(doc.extract_font(f[0])[3]) for f in fonts)
+        vector = bool(lines) and not page.get_images() and all(f[2] != 'Type3' for f in fonts)
+        percentages = re.findall(r'\d+\.\d%', '\n'.join(t for t, _ in lines))
+        minimum = float(min(sizes)) if sizes else 0.0
+        return {'pdf_min_font_pt': minimum, 'pdf_embedded_fonts': embedded,
+                'pdf_editable_vector_text': vector, 'pdf_percentage_labels': len(percentages),
+                'pdf_text_collisions': collisions, 'pdf_clipped_text': clipped,
+                'pdf_status': 'PASS' if minimum >= 7.5 and embedded and vector and
+                len(percentages) == 72 and not clipped and not collisions else 'FAIL'}
+
+
 def make_figures(data, plan, kind):
     built = []
     with plt.rc_context(STYLE):
@@ -220,8 +316,12 @@ def make_figures(data, plan, kind):
                 factory = scatter_figure if kind == 'scatter' else importance_figure
                 fig, axes, values = factory(data, plan, window, version)
                 qc = layout_qc(fig, axes, values)
+                if kind == 'importance':
+                    qc.update(importance_alignment_qc(fig, axes))
+                    if qc['alignment_status'] != 'PASS':
+                        qc['status'] = 'FAIL'
                 qc.update({'figure': f'Fig{number}', 'window': window, 'version': version,
-                           'basename': f'Fig{number}_{stem}_{version}',
+                           'basename': f'Fig{number}_{stem}_{version}' + ('_layout_v2' if kind == 'importance' else ''),
                            'axes': [{'xlim': list(a.get_xlim()), 'ylim': list(a.get_ylim()),
                                      'xticks': a.get_xticks().tolist(), 'yticks': a.get_yticks().tolist()} for a in axes]})
                 built.append({'fig': fig, 'qc': qc})
@@ -230,26 +330,44 @@ def make_figures(data, plan, kind):
 
 def save_figures(built, input_root, output_root):
     out = output_guard(input_root, output_root)
-    if len(built) != 8:
-        raise ValueError('Expected all eight figures before export')
+    numbers = {b['qc']['figure'] for b in built}
+    if (len(built), numbers) not in [(8, {'Fig3', 'Fig4', 'Fig9', 'Fig10'}),
+                                   (4, {'Fig4', 'Fig10'})]:
+        raise ValueError('Expected all eight figures or the four layout-v2 importance figures')
     # Verify the final raw/resid axes and actual ticks rather than merely intentions.
     for number in (3, 4, 9, 10):
+        if f'Fig{number}' not in numbers:
+            continue
         pair = [b for b in built if b['qc']['figure'] == f'Fig{number}']
         if len(pair) != 2 or pair[0]['qc']['axes'] != pair[1]['qc']['axes']:
             raise ValueError(f'Raw/residualized axes mismatch Fig{number}')
     qcs = [b['qc'] for b in built]
+    if any(q['figure'] in ('Fig4', 'Fig10') and not q['basename'].endswith('_layout_v2') for q in qcs):
+        raise ValueError('Importance exports must use layout_v2 names to preserve prior formal figures')
     (out / 'qc').mkdir(parents=True, exist_ok=True)
-    (out / 'qc/figure_layout_qc.json').write_text(json.dumps(qcs, indent=2), encoding='utf-8')
+    qc_path = out / 'qc/figure_layout_v2_qc.json'
+    qc_path.write_text(json.dumps(qcs, indent=2), encoding='utf-8')
     if any(q['status'] != 'PASS' for q in qcs):
-        raise ValueError('Rendered figure layout QC failed; inspect figure_layout_qc.json. No figure files exported.')
+        raise ValueError('Rendered figure layout QC failed; inspect figure_layout_v2_qc.json. No figure files exported.')
     (out / 'figures').mkdir(parents=True, exist_ok=True)
     manifest = []
     for b in built:
         fig, qc = b['fig'], b['qc']
         stem = out / 'figures' / qc['basename']
         # Fixed canvas: never bbox_inches="tight". Explicit None avoids inherited rc.
-        fig.savefig(stem.with_suffix('.png'), dpi=DPI, bbox_inches=None)
-        fig.savefig(stem.with_suffix('.pdf'), bbox_inches=None)
+        # Existing Fig.3/9 exports remain untouched during an importance redesign.
+        if (qc['figure'] in ('Fig3', 'Fig9') and
+                stem.with_suffix('.png').is_file() != stem.with_suffix('.pdf').is_file()):
+            raise ValueError(f'Incomplete existing scatter pair {stem}; export importance figures only')
+        keep_scatter = qc['figure'] in ('Fig3', 'Fig9') and stem.with_suffix('.png').is_file() and stem.with_suffix('.pdf').is_file()
+        if not keep_scatter:
+            fig.savefig(stem.with_suffix('.png'), dpi=DPI, bbox_inches=None)
+            if qc['figure'] in ('Fig4', 'Fig10'):
+                # PDF font embedding is selected at export, outside the creation rc_context.
+                with plt.rc_context({'pdf.fonttype': 42, 'ps.fonttype': 42}):
+                    fig.savefig(stem.with_suffix('.pdf'), bbox_inches=None)
+            else:
+                fig.savefig(stem.with_suffix('.pdf'), bbox_inches=None)
         png, pdf = stem.with_suffix('.png'), stem.with_suffix('.pdf')
         width, height = struct.unpack('>II', png.read_bytes()[16:24])
         box = re.search(rb'/MediaBox\s*\[\s*0\s+0\s+([\d.]+)\s+([\d.]+)', pdf.read_bytes())
@@ -259,6 +377,11 @@ def save_figures(built, input_root, output_root):
                 not np.isclose(pdf_width, WIDTH, atol=1e-8) or
                 not np.isclose(pdf_height, fig.get_figheight(), atol=1e-8)):
             raise ValueError(f'Export dimensions/file check failed {stem}')
+        if qc['figure'] in ('Fig4', 'Fig10'):
+            qc.update(pdf_importance_qc(pdf))
+            qc_path.write_text(json.dumps(qcs, indent=2), encoding='utf-8')
+            if qc['pdf_status'] != 'PASS':
+                raise ValueError(f'Exported PDF QA failed {pdf}; inspect {qc_path}. No acceptance manifest written.')
         manifest.append({**{k: qc[k] for k in ['figure', 'window', 'version', 'basename']},
                          'png_width_px': width, 'png_height_px': height,
                          'width_inches': WIDTH, 'height_inches': fig.get_figheight(),
@@ -267,5 +390,5 @@ def save_figures(built, input_root, output_root):
                          'png_sha256': hashlib.sha256(png.read_bytes()).hexdigest(),
                          'pdf_sha256': hashlib.sha256(pdf.read_bytes()).hexdigest(), 'status': 'PASS'})
         plt.close(fig)
-    pd.DataFrame(manifest).to_csv(out / 'qc/table_figure_manifest.csv', index=False)
+    pd.DataFrame(manifest).to_csv(out / 'qc/table_figure_layout_v2_manifest.csv', index=False)
     return pd.DataFrame(manifest)

@@ -42,7 +42,7 @@ def execute_notebook(name, root, inp, out):
     return nb
 
 
-def test_both_notebooks_restart_run_all_without_hidden_state(tmp_path):
+def test_fresh_plot_kernel_rejects_unconfirmed_synthetic_reference(tmp_path):
     inp, out = tmp_path / 'synthetic_input', tmp_path / 'synthetic_comparison'
     tables = inp / 'tables'
     tables.mkdir(parents=True)
@@ -54,9 +54,10 @@ def test_both_notebooks_restart_run_all_without_hidden_state(tmp_path):
     manifest = json.loads((out / 'qc/comparison_manifest.json').read_text())
     assert manifest['computational_status'] == 'PASS'
     assert manifest['history_status'] == 'INCOMPLETE'
-    execute_notebook('mlr_comparison_figures.ipynb', tmp_path, inp, out)
-    assert len(list((out / 'figures').glob('*.png'))) == 8
-    assert len(list((out / 'figures').glob('*.pdf'))) == 8
+    with pytest.raises(nbclient.exceptions.CellExecutionError, match='12 June residualized LMG order mismatch'):
+        execute_notebook('mlr_comparison_figures.ipynb', tmp_path, inp, out)
+    assert not list((out / 'figures').glob('*.png'))
+    assert not list((out / 'figures').glob('*.pdf'))
     assert hashes == {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in tables.iterdir()}
 
 

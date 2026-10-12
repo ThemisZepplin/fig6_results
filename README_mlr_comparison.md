@@ -117,7 +117,8 @@ SHA-256 values and numerical library versions are recorded in the manifest.
 - `qc/`: manifest with table checksums and gate, historical reproduction CSV,
   actual 2000×6 permutation sequence, rendered layout QC, figure-file manifest.
 - `figures/`: Fig3_Total, Fig4_Total, Fig9_StageI, Fig10_StageI, each suffixed
-  `_residualized` and `_raw`, each PNG/PDF (16 files). Only these eight figures
+  `_residualized` and `_raw`, each PNG/PDF (16 files). Fig.4/10 new exports also
+  have `_layout_v2` suffixes; prior formal figures are preserved. Only these eight figures
   are produced; no difference heatmaps.
 
 The figure notebook rejects edited/incomplete/failed result tables. Scatter layout
@@ -125,17 +126,59 @@ is 2×2 in date order; each paired init/window shares limits and ticks, while di
 inits can use different ranges. Cell 14 styles, fitted trend and r/R²/slope diagnostics
 are retained; no 1:1 line is drawn. Axis boxes have equal physical dimensions,
 without equal data-unit aspect constraints. Importance layout is 3×4, with common
-per-method scales across both windows/all inits/versions and residualized LMG position
-order in every corresponding panel. Green/blue/orange are fixed by method.
-Black bold one-decimal values are measured using rendered text extents and placed
-inside only when they fit; short/zero bars retain true lengths. LOFO uses the exact
+per-method scales across both windows/all inits/versions.
+For each window, predictor positions are fixed according to the descending LMG importance in the 12 June 2023 residualized model and retained across all initialization dates, methods, and raw/residualized counterparts.
+The CSV-derived reference order must match the confirmed order exactly:
+Total = TP, Z500, NCVI, TCC resid, Init MSE*, SM resid;
+Stage-I = SHF resid, SM, Z500, Init MSE*, NCVI, TCC resid.
+Raw names use the same positions (SHF resid→SHF, TCC resid→TCC, SM resid→SM).
+Mismatch raises an error, with no fallback to per-date/per-method sorting.
+Existing numerical comparison CSV `display_order` fields are not rewritten;
+the renderer derives its v2 order from the actual 12 June LMG rows.
+Green/blue/orange are fixed by method. Only panels (a), (e), (i) show factor names.
+Black bold 8-point one-decimal values are measured using rendered text extents and
+prefer the bar-end exterior. Labels that cannot fit outside move inside with a small,
+borderless near-white backing; short/zero bars retain true lengths. LOFO uses the exact
 heading `Normalized positive ΔR² (%)`. Width is 6.5 inch, PNG is 600 dpi/3900 pixels,
 and PDF uses the same complete fixed canvas (no tight cropping).
+
+Layout v2 uses a 6.5×8.1-inch GridSpec canvas with equal relative axis widths
+approximately 0.1838 (1.195 inches). Margins: left .145, right .985, bottom .09,
+top .92; GridSpec wspace .19, hspace .60. Factor labels are 8 pt, panel/date headings
+9 pt, method row headings 10 pt. No x ticks/grid; only a pale-grey left zero line
+remains. TrueType embedding is explicitly selected at PDF export. These parameters
+are checked against rendered geometry, not used as a substitute for final-file QA.
+
+New outputs: `Fig4_Total_{raw,residualized}_layout_v2.{png,pdf}` and
+`Fig10_StageI_{raw,residualized}_layout_v2.{png,pdf}`. Use the existing figure Notebook;
+or, to redraw only the four importance figures, call `make_figures(data, plan,
+'importance')` then `save_figures(built, INPUT_ROOT, OUTPUT_ROOT)` after `load_results`
+and `figure_plan`. Existing Fig.3/9 pairs are retained during full exports.
+New QC filenames are `qc/figure_layout_v2_qc.json` and
+`qc/table_figure_layout_v2_manifest.csv`; old figure QC is not overwritten.
+Computational CSVs, their checksums, and their manifest are read-only in rendering.
 
 Automatic QC checks text collisions/clipping, value containment, equal boxes,
 paired actual ticks/limits and exported file sizes. Real HPC figures still need
 manual visual review for annotations covering data and manuscript readability.
 Caption drafts are in `mlr_comparison_captions.md`. Bold labels imply no significance.
+
+The v2 QA follows the [nature-figure reference](https://github.com/Yuan1z0825/nature-skills/blob/main/skills/nature-figure/README.md)
+for final-size alignment, text and data integrity, adapted to JGR: Atmospheres.
+Measured row/column edges, repeated gaps and panel title anchors must agree within
+1.5 pt. Exported importance PDFs are read with **PyMuPDF** (`pip install pymupdf`):
+actual font sizes ≥7.5 pt, embedded fonts, editable vector text, all 72 percentage
+labels, no clipping or unexpected line-box collisions are required. Failures block
+the acceptance manifest; they are not suppressed with clipping or ignored QC.
+Outside labels use the white page background; white backing is confined to labels
+that must go inside. Final real-data visual review remains necessary.
+
+To run actual-range QA without writing into historical data, set
+`MLR_REAL_OUTPUT_ROOT` to the existing, checksum-approved comparison output directory
+and run `pytest -q tests/test_mlr_comparison_plotting.py`. The genuine CSV test
+renders to a separate temporary directory and runs PDF/PNG QC. Without that path,
+the real-data test is explicitly skipped. Synthetic layout fixtures use declared
+test-only reference percentages; they do not establish actual scientific rankings.
 
 ## Tests and limitations
 

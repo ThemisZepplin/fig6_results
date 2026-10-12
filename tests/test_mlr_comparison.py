@@ -219,9 +219,9 @@ def test_output_protection_and_saved_results(calculated, tmp_path):
     assert manifest['history_status'] == 'INCOMPLETE'
     import mlr_comparison_plotting as plotting
     data, _ = plotting.load_results(out)
-    plan = plotting.figure_plan(data)
-    assert len(plan['scatter']) == 8
-    assert len(plan['order']) == 8
+    # Arbitrary synthetic scientific rankings must not silently replace the confirmed reference.
+    with pytest.raises(ValueError, match='12 June residualized LMG order mismatch'):
+        plotting.figure_plan(data)
     with (out / 'tables/table_mlr_fitted_members.csv').open('a') as f:
         f.write('\n')
     with pytest.raises(ValueError, match='changed after computation QC'):
