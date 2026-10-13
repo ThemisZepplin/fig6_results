@@ -56,3 +56,22 @@ def test_development_files_are_unchanged():
     for name in files:
         expected = subprocess.check_output(['git', 'show', f'{base}:{name}'])
         assert Path(name).read_bytes() == expected
+
+
+def test_group_source_and_anomaly_gates_are_declared_without_fitting():
+    source = Path('process_timeseries_core.py').read_text()
+    for entry in ('probe_sources', 'audit_exporter_notebook', 'current_group_audit',
+                  'check_units', 'reaggregate_member_daily'):
+        assert f'def {entry}(' in source
+    for token in ('middle17_mean', 'legacy_match', 'reaggregate_member_daily',
+                  'absolute fallback', 'mean_state_prediction', 'full_fit_max_abs_difference'):
+        assert token in source
+    assert "'residualization', 'fitted'" in source
+
+
+def test_corrected_scatter_orientation_and_stage_boundary():
+    source = Path('process_timeseries_plotting.py').read_text()
+    assert "for row, factor in enumerate(('sm_avg', 'partial_fitted_Tmax'))" in source
+    assert 'for col, init in enumerate(INITS)' in source
+    assert "pd.Timestamp('2023-06-18 00:00')" in source
+    assert '2023-06-17 12:00' not in source

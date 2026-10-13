@@ -19,6 +19,48 @@ OUTPUT_TABLES = ('table_fig5_total_daily_timeseries.csv',
                  'table_fig11_stageI_daily_timeseries.csv',
                  'table_figS11_stageI_scatter_members.csv',
                  'table_fig11_partial_fitted_audit.csv')
+UNITS = {'NCHN_tp': 'mm', 'z500_anom_NCHN': 'gpm', 'sm_avg': 'm3 m-3',
+         'SHF_Avg': 'W m-2', 'NCVI_concurrent': 'PVU', 'TCC_Avg': 'fraction'}
+
+
+def probe_sources(paths):
+    """Inventory all sources before any calculations, including missing files."""
+    rows = []
+    for name, value in paths.items():
+        p = Path(value).expanduser() if value is not None else None
+        record = {'source': name, 'path': str(p), 'exists': bool(p and p.is_file())}
+        if record['exists']:
+            record['sha256'] = sha256(p)
+            if p.suffix == '.csv':
+                try:
+                    d = pd.read_csv(p)
+                    record.update(rows=len(d), columns=json.dumps(list(d.columns)), parse_status='PASS')
+                except (ValueError, pd.errors.ParserError) as exc:
+                    record.update(parse_status='FAIL', error=str(exc))
+        rows.append(record)
+    return pd.DataFrame(rows)
+
+
+def audit_exporter_notebook(path):
+    """Read Cell 3 as text only; never execute the exporter or its raw-file code."""
+    nb = json.loads(Path(path).read_text())
+    if len(nb.get('cells', [])) < 3:
+        raise ValueError('Exporter Notebook has no physical Cell 3; supply the actual source')
+    names = ('daily_timeseries_all_factors.csv', 'member_stage_values_for_tests.csv', 'group_member_audit.csv')
+    code_indices = [i for i, c in enumerate(nb['cells']) if c.get('cell_type') == 'code']
+    candidates = {2}
+    if len(code_indices) >= 3:
+        candidates.add(code_indices[2])
+    matches = [i for i in candidates if nb['cells'][i].get('cell_type') == 'code' and
+               all(name in ''.join(nb['cells'][i].get('source', [])) for name in names)]
+    if len(matches) != 1:
+        raise ValueError('Cannot uniquely identify physical/third-code Cell 3 with all three exports; inspect the actual notebook numbering')
+    cell_index = matches[0]
+    source = ''.join(nb['cells'][cell_index].get('source', []))
+    if 'middle17_mean' not in source:
+        raise ValueError('Exporter Cell 3 does not document middle17_mean; inspect schema before reuse')
+    return {'source': 'exporter_cell3', 'path': str(path), 'sha256': sha256(path),
+            'cell_index': cell_index, 'execution': 'none', 'review_text': source}
 
 
 def sha256(path):
@@ -57,19 +99,179 @@ def read_sources(paths):
     """Read explicit paths only; do not search for or generate upstream data."""
     data, provenance = {}, []
     for name, value in paths.items():
+        if name == 'member_daily' and (value is None or not Path(value).is_file()):
+            data[name] = None
+            continue
+        if value is None:
+            raise FileNotFoundError(f'Configure the required existing source path: {name}')
         p = Path(value).expanduser().resolve()
         if not p.is_file():
             raise FileNotFoundError(f'Missing existing export {name}: {p}. Configure paths; no upstream pipeline is run.')
-        data[name] = json.loads(p.read_text()) if p.suffix == '.json' else pd.read_csv(p)
-        provenance.append({'source': name, 'path': str(p), 'sha256': sha256(p)})
+        data[name] = audit_exporter_notebook(p) if name == 'source_notebook' else (json.loads(p.read_text()) if p.suffix == '.json' else pd.read_csv(p))
+        record = {'source': name, 'path': str(p), 'sha256': sha256(p), 'exists': True}
+        if isinstance(data[name], pd.DataFrame):
+            record.update(rows=len(data[name]), columns=json.dumps(list(data[name].columns)))
+        if name == 'source_notebook':
+            record.update(cell_index=data[name]['cell_index'], notebook_execution='none')
+        provenance.append(record)
     manifest = data['model_manifest']
     if manifest.get('computational_status') != 'PASS':
         raise ValueError('Paired MLR computation QC is not PASS')
-    for name in ('summary', 'coefficients', 'design', 'residualization'):
+    for name in ('summary', 'coefficients', 'design', 'residualization', 'fitted'):
         p = Path(paths[name]).resolve()
         if manifest.get('table_sha256', {}).get(p.name) != sha256(p):
             raise ValueError(f'Model source checksum mismatch: {p}')
     return data, provenance
+
+
+def truth(values, context):
+    result = values.astype(str).str.lower().map({'true': True, '1': True, '1.0': True,
+                                              'false': False, '0': False, '0.0': False})
+    if result.isna().any():
+        raise ValueError(f'{context}: need explicit boolean anomaly metadata, not an inferred label')
+    return result
+
+
+def check_units(data):
+    """Metadata must come from the actual exporter, not a manually guessed unit."""
+    m = data['variable_metadata'].copy()
+    require(m, ['factor', 'units', 'is_anomaly', 'evidence_source'], 'exporter variable metadata')
+    m['factor'] = m.factor.replace({'NCVI_conc': 'NCVI_concurrent'})
+    for factor, expected in UNITS.items():
+        row = m[m.factor == factor]
+        if not len(row) or not (row.units == expected).all() or row.evidence_source.isna().any() or not row.evidence_source.astype(str).str.strip().ne('').all():
+            raise ValueError(f'{factor}: unverified/incompatible units; require {expected} and an exporter evidence source (no silent conversion)')
+    nc_metadata = m[m.factor == 'NCVI_concurrent'].copy()
+    require(nc_metadata, ['init_date', 'window', 'date'], 'actual per-case NCVI anomaly metadata')
+    nc_metadata['window'] = normalize_window(nc_metadata.window)
+    nc_metadata['date'] = pd.to_datetime(nc_metadata.date)
+    for init in INITS:
+        for window, end in [('Total','2023-06-24'), ('Stage-I','2023-06-18')]:
+            expected_dates = pd.date_range('2023-06-14', end)
+            q = nc_metadata[(nc_metadata.init_date == init) & (nc_metadata.window == window) & nc_metadata.date.isin(expected_dates)].sort_values('date')
+            if len(q) != len(expected_dates) or not np.array_equal(q.date.to_numpy(), expected_dates.to_numpy()):
+                raise ValueError(f'{init}/{window}: need actual NCVI anomaly/fallback evidence for every target date, not a global assumed mode')
+            if not truth(q.is_anomaly, 'NCVI metadata').all():
+                raise ValueError('NCVI absolute fallback cannot be labelled or plotted as anomaly')
+    # If an export itself carries a fallback flag, it overrides no sidecar declaration.
+    for name in ('daily', 'member_daily', 'member_stage'):
+        d = data.get(name)
+        if d is None or 'factor' not in d:
+            continue
+        nc = d[d.factor.isin(('NCVI_conc', 'NCVI_concurrent'))]
+        init_col = next((c for c in ('init_date','init') if c in nc), None)
+        if init_col:
+            nc = nc[nc[init_col].isin(INITS)]
+        window_col = next((c for c in ('grouping_stage','window','stage') if c in nc), None)
+        if window_col:
+            nc = nc[normalize_window(nc[window_col]).isin(('Stage-I','Total'))]
+        if 'date' in nc:
+            dates = pd.to_datetime(nc.date)
+            keep = dates.between('2023-06-14','2023-06-24')
+            if window_col:
+                keep &= ~((normalize_window(nc[window_col]) == 'Stage-I') & (dates > pd.Timestamp('2023-06-18')))
+            nc = nc[keep]
+        for column in ('ncvi_is_anomaly', 'anomaly_used', 'is_anomaly'):
+            if column in nc and len(nc) and not truth(nc[column], name+' NCVI').all():
+                raise ValueError(f'{name}: NCVI absolute fallback detected')
+        if 'units' in d:
+            for factor, rows in d.groupby('factor'):
+                canonical_factor = 'NCVI_concurrent' if factor == 'NCVI_conc' else factor
+                if canonical_factor in UNITS and not (rows.units == UNITS[canonical_factor]).all():
+                    raise ValueError(f'{name}/{factor}: unit metadata disagrees with source metadata')
+    m['status'] = 'PASS'
+    return m
+
+
+def current_group_audit(data):
+    """Compare legacy exports with v12 absolute Tmax rankings, never alter definitions."""
+    current = canonical(data['stage_input'], {'init_date': ('init_date', 'init'),
+                         'window': ('window', 'stage'), 'member': ('member',)}, 'v12 stage input')
+    current['window'] = normalize_window(current.window)
+    require(current, ['y_tmax', 'sm_avg', 'SHF_Avg'], 'v12 stage input')
+    legacy = prepare_groups(data['groups'])
+    old = canonical(data['member_stage'], {'init_date': ('init_date', 'init'),
+                     'window': ('window', 'stage', 'grouping_stage'), 'member': ('member',),
+                     'y_tmax': ('y_tmax', 'member_stage_mean_Tmax', 'stage_mean_Tmax')}, 'legacy member-stage export')
+    old['window'] = normalize_window(old.window)
+    groups, checks = [], []
+    for init in INITS:
+        for window in ('Stage-I', 'Total'):
+            s = current[(current.init_date == init) & (current.window == window)].sort_values('member').copy()
+            if len(s) != 51 or not np.array_equal(s.member, np.arange(51)):
+                raise ValueError(f'v12 {init}/{window}: incomplete or duplicate member IDs')
+            finite(s.y_tmax, 'v12 ranking Tmax')
+            # Same descending absolute-Tmax definition as the old grouping routine.
+            ranked = s.sort_values('y_tmax', ascending=False).copy()
+            yy = ranked.y_tmax.to_numpy()
+            if yy[16] == yy[17] or yy[33] == yy[34]:
+                raise ValueError('Tmax tie across a 17-member boundary: require an explicit original tie audit; do not change group definition')
+            ranked['rank'] = np.arange(1, 52)
+            ranked['group'] = np.where(ranked['rank'] <= 17, 'Hot17', np.where(ranked['rank'] >= 35, 'Cold17', 'Middle17'))
+            o = old[(old.init_date == init) & (old.window == window)].copy()
+            if o.duplicated('member').any() or len(o) != 51:
+                raise ValueError(f'{init}/{window}: legacy member-stage adapter needs one absolute Tmax per member; audit the actual Cell 3 schema')
+            finite(o.y_tmax, 'legacy member Tmax')
+            o = o.sort_values('y_tmax', ascending=False)
+            old_rank = dict(zip(o.member, np.arange(1, 52)))
+            old_y = dict(zip(o.member, o.y_tmax))
+            legacy_case = legacy[(legacy.init_date == init) & (legacy.window == window)].set_index('member')
+            old_group = legacy_case['group']
+            for row in ranked.itertuples():
+                same = row.member in old_y and abs(old_y[row.member]-row.y_tmax) <= 1e-6 and old_rank[row.member] == row.rank and old_group.loc[row.member] == row.group
+                for column in ('rank_by_stage_mean_Tmax','rank'):
+                    if column in legacy_case:
+                        same = same and legacy_case.loc[row.member, column] == row.rank
+                for column in ('member_stage_mean_Tmax','y_tmax'):
+                    if column in legacy_case:
+                        same = same and np.isclose(legacy_case.loc[row.member,column], row.y_tmax, atol=1e-6, rtol=0)
+                checks.append({'init_date': init, 'window': window, 'member': row.member,
+                               'current_y_tmax': row.y_tmax, 'legacy_y_tmax': old_y.get(row.member),
+                               'current_rank': row.rank, 'legacy_rank': old_rank.get(row.member),
+                               'current_group': row.group, 'legacy_group': old_group.loc[row.member],
+                               'legacy_match': bool(same)})
+            groups.append(ranked[['init_date', 'window', 'member', 'group']])
+            fit = data['fitted']
+            fit = fit[(fit.init_date == init) & (fit.window == window)]
+            for version in VERSIONS:
+                f = fit[fit.version == version].sort_values('member')
+                if len(f) != 51 or not np.array_equal(f.member, s.member) or not np.allclose(f.y_tmax, s.y_tmax, atol=1e-8, rtol=0):
+                    raise ValueError(f'{init}/{window}/{version}: saved fit target differs from v12 input')
+    audit = pd.DataFrame(checks)
+    audit['action'] = np.where(audit.groupby(['init_date','window']).legacy_match.transform('all'), 'reuse_verified_legacy', 'reaggregate_member_daily')
+    return pd.concat(groups, ignore_index=True), audit, current
+
+
+def reaggregate_member_daily(data, groups, init, window):
+    """Recover group means from existing per-member daily CSVs only, never GRIB."""
+    member = data.get('member_daily')
+    if member is None:
+        raise ValueError(f'{init}/{window}: legacy grouping is incompatible; provide a verified member_daily CSV, no GRIB fallback')
+    d = canonical(member, {'init_date': ('init_date', 'init'), 'date': ('date',),
+                          'member': ('member',), 'factor': ('factor',), 'value': ('value',)}, 'member daily')
+    require(d, ['units'], 'member daily')
+    d['date'] = pd.to_datetime(d.date)
+    if d.date.dt.tz is not None or not (d.date == d.date.dt.normalize()).all():
+        raise ValueError('Member daily source must use BJT calendar dates')
+    d['factor'] = d.factor.replace({'NCVI_conc': 'NCVI_concurrent'})
+    dates = pd.date_range('2023-06-14', '2023-06-24' if window == 'Total' else '2023-06-18')
+    factors = FACTORS5 if window == 'Total' else FACTORS11
+    g = groups[(groups.init_date == init) & (groups.window == window)]
+    rows = []
+    for factor in factors:
+        for date in dates:
+            s = d[(d.init_date == init) & (d.factor == factor) & (d.date == date)]
+            if len(s) != 51 or not np.array_equal(np.sort(s.member), np.arange(51)):
+                raise ValueError(f'{init}/{window}/{date}/{factor}: require 51 complete member-daily values')
+            finite(s.value, 'member-daily aggregation')
+            joined = s.merge(g[['member','group']], on='member', validate='one_to_one')
+            for group in GROUPS:
+                mean_value = float(joined[joined.group == group].value.mean())
+                finite(mean_value, 'reaggregated member-daily group mean')
+                rows.append({'init_date': init, 'window': window, 'date': date, 'group': group,
+                             'factor': factor, 'value': mean_value,
+                             'available': True, 'grouping_source': 'member-daily export reaggregated using verified v12 absolute-Tmax groups'})
+    return pd.DataFrame(rows)
 
 
 def prepare_groups(df):
@@ -87,7 +289,7 @@ def prepare_groups(df):
                 raise ValueError(f'{init}/{w}: require member IDs 0..50 exactly once')
             if s.groupby('group').size().to_dict() != {k: 17 for k in GROUPS}:
                 raise ValueError(f'{init}/{w}: require Hot17/Middle17/Cold17 each n=17')
-    return g[['init_date', 'window', 'member', 'group']]
+    return g
 
 
 def prepare_daily(df):
@@ -159,8 +361,24 @@ def parameters(data, init, version):
         raise ValueError('Training response differs by predictor position')
     intercept = float(s.iloc[0].standardized_intercept)
     finite(intercept, 'standardized intercept')
+    fitted = select(data['fitted']).sort_values('member')
+    require(fitted, ['member','y_tmax','y_fitted','residual'], 'saved fitted members')
+    if len(fitted) != 51 or not np.array_equal(fitted.member, np.arange(51)):
+        raise ValueError('Saved fitted members incomplete')
+    reconstructed = intercept + ((pivot.to_numpy() - c['mean'].to_numpy()) /
+                                  c.scale_ddof0.to_numpy()) @ c.standardized_coef.to_numpy()
+    finite(fitted[['y_tmax','y_fitted','residual']], 'saved fitted members')
+    if not np.allclose(reconstructed, fitted.y_fitted, atol=1e-6, rtol=0) or not np.allclose(y.iloc[:,0], fitted.y_tmax, atol=1e-8, rtol=0):
+        raise ValueError('Full-model replay differs from saved fit/Stage-I training response; coefficients are not replaced')
+    if not np.allclose(fitted.y_tmax-fitted.y_fitted, fitted.residual, atol=1e-8, rtol=0):
+        raise ValueError('Saved fitted residual identity failed')
+    mean_state_prediction = float(intercept + ((pivot.mean().to_numpy()-c['mean'].to_numpy()) / c.scale_ddof0.to_numpy()) @ c.standardized_coef.to_numpy())
+    if not np.isclose(mean_state_prediction, intercept, atol=1e-8, rtol=0) or not np.isclose(mean_state_prediction, fitted.y_fitted.mean(), atol=1e-8, rtol=0):
+        raise ValueError('Diagnostic baseline does not equal full-model prediction at training mean state')
     return {'intercept': intercept, 'coef': c.set_index('predictor'),
-            'design': pivot, 'y': y.iloc[:, 0].sort_index(), 'version': version}
+            'design': pivot, 'y': y.iloc[:, 0].sort_index(), 'version': version,
+            'mean_state_prediction': mean_state_prediction,
+            'full_fit_max_abs_difference': float(np.max(np.abs(reconstructed-fitted.y_fitted.to_numpy())))}
 
 
 def residual_relation(data, init):
@@ -190,8 +408,37 @@ def partial_fitted_tmax(sm_value, shf_value, model, relation):
 
 
 def build_tables(data, provenance):
-    groups = prepare_groups(data['groups'])
-    daily = prepare_daily(data['daily'])
+    unit_qc = check_units(data)
+    groups, group_qc, current = current_group_audit(data)
+    old_daily = prepare_daily(data['daily'])
+    pieces = []
+    for init in INITS:
+        for window in ('Stage-I','Total'):
+            q = group_qc[(group_qc.init_date == init) & (group_qc.window == window)]
+            old = old_daily[(old_daily.init_date == init) & (old_daily.window == window)]
+            if q.legacy_match.all():
+                if data.get('member_daily') is not None:
+                    rebuilt = reaggregate_member_daily(data, groups, init, window)
+                    comparison = old[old.group != 'ERA5'].merge(
+                        rebuilt[['date','group','factor','value']], on=['date','group','factor'],
+                        validate='one_to_one', suffixes=('_old','_member'))
+                    difference = float(np.max(np.abs(comparison.value_old-comparison.value_member)))
+                    group_qc.loc[q.index, 'daily_mean_max_abs_difference'] = difference
+                    if difference > 1e-6:
+                        pieces.extend([rebuilt, old[old.group == 'ERA5']])
+                        group_qc.loc[q.index, 'action'] = 'reaggregate_numeric_mismatch'
+                    else:
+                        pieces.append(old)
+                    group_qc.loc[q.index, 'member_daily_reconstruction_checked'] = True
+                else:
+                    pieces.append(old)
+                    group_qc.loc[q.index, 'member_daily_reconstruction_checked'] = False
+            else:
+                new = reaggregate_member_daily(data, groups, init, window)
+                # ERA5 observations are independent of member group reassignments.
+                pieces.extend([new, old[old.group == 'ERA5']])
+                group_qc.loc[q.index, 'member_daily_reconstruction_checked'] = True
+    daily = pd.concat(pieces, ignore_index=True)
     source_json = json.dumps(provenance, sort_keys=True)
     total = daily[daily.window == 'Total'].copy()
     total['parameter_source'] = 'not model dependent'
@@ -206,6 +453,10 @@ def build_tables(data, provenance):
             raise ValueError('Raw/residualized training responses differ')
         if not np.allclose(raw.sm_avg, resid.sm_avg, rtol=0, atol=1e-10):
             raise ValueError('Raw/residualized SM training samples differ')
+        original = current[(current.init_date == init) & (current.window == 'Stage-I')].sort_values('member')
+        for factor in ('sm_avg','SHF_Avg'):
+            if not np.allclose(original[factor], raw[factor], atol=1e-8, rtol=0):
+                raise ValueError(f'v12 {factor} does not match saved Stage-I model design')
         expected = raw.SHF_Avg - (a + b * raw.sm_avg)
         if not np.allclose(expected, resid.SHF_resid, rtol=0, atol=1e-8):
             raise ValueError('Fixed residual relation does not reproduce saved Stage-I SHF_resid')
@@ -236,6 +487,7 @@ def build_tables(data, provenance):
             p['residual_intercept'], p['residual_slope'] = a, b
             p['parameter_source'] = source_json
             p['reference_role'] = np.where(p.group == 'ERA5', 'model diagnostic projected from ERA5 SM/SHF, not observed Tmax', 'member-group diagnostic')
+            p['outside_training_window'] = p.date > pd.Timestamp('2023-06-17')
             stage_tables += [d, p]
             values, projected = partial_fitted_tmax(raw.sm_avg, raw.SHF_Avg, model, (a, b))
             finite(values, 'member partial fitted diagnostic')
@@ -259,6 +511,9 @@ def build_tables(data, provenance):
                                    'projection_rule': ('fixed stage SHF relation; no daily residual regression' if version == 'residualized' else 'raw SHF direct; no residual projection'),
                                    'model_train_start_bjt': '2023-06-14', 'model_train_end_bjt': '2023-06-17',
                                    'display_end_bjt': '2023-06-18', 'n_training_members': 51})
+                audit_rows[-1].update(baseline_prediction_at_training_means=model['mean_state_prediction'],
+                                      baseline_difference=model['mean_state_prediction']-model['intercept'],
+                                      full_fit_max_abs_difference=model['full_fit_max_abs_difference'])
     fig11 = pd.concat(stage_tables, ignore_index=True)
     scatter = pd.DataFrame(scatter_rows)
     # Explicit equality gates: raw daily covariates and Tmax/SM scatter never vary by version.
@@ -273,13 +528,19 @@ def build_tables(data, provenance):
         if not np.array_equal(r[['y_tmax', 'sm_avg']].to_numpy(), s[['y_tmax', 'sm_avg']].to_numpy()):
             raise ValueError('Tmax/raw-SM scatter changed between model versions')
     total['source_provenance'] = source_json
-    return dict(zip(OUTPUT_TABLES, (total, fig11, scatter, pd.DataFrame(audit_rows))))
+    result = dict(zip(OUTPUT_TABLES, (total, fig11, scatter, pd.DataFrame(audit_rows))))
+    result.update({'table_process_group_consistency_qc.csv': group_qc,
+                   'table_process_variable_units_qc.csv': unit_qc,
+                   'table_process_source_qc.csv': pd.DataFrame(provenance)})
+    return result
 
 
 def output_guard(output_root, input_paths):
     """Require an independent empty run directory; reruns use a new root."""
     out = Path(output_root).expanduser().resolve()
     for path in input_paths.values():
+        if path is None:
+            continue
         p = Path(path).expanduser().resolve()
         if (out == p.parent or out in p.parents or p == out or
                 out == p.parent.parent or p.parent.parent in out.parents):

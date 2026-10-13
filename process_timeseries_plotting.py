@@ -82,17 +82,18 @@ def timeseries_figure(df, factors, window, version=None):
             for group in ('ERA5', *GROUPS):
                 g = s[s.group == group].sort_values('date')
                 if g.value.notna().all():
-                    ax.plot(g.date, g.value, color=COLORS[group], marker='o', ms=2.6, lw=1.3)
+                    # Calendar-day aggregates are shown at the BJT day midpoint.
+                    ax.plot(g.date + pd.Timedelta(hours=12), g.value, color=COLORS[group], marker='o', ms=2.6, lw=1.3)
                 elif group == 'ERA5' and g.value.isna().all():
                     ax.text(0.02, 0.03, 'ERA5 unavailable', transform=ax.transAxes, fontsize=7, color='0.4')
                 else:
                     raise ValueError('Incomplete process series cannot be silently omitted')
             ax.set_ylim(ylim); ax.set_yticks(ticks)
-            ax.set_xlim(pd.Timestamp('2023-06-14'), pd.Timestamp(end))
+            ax.set_xlim(pd.Timestamp('2023-06-14'), pd.Timestamp(end) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1))
             ax.xaxis.set_major_locator(mdates.DayLocator(interval=2 if window == 'Total' else 1))
             ax.xaxis.set_major_formatter(mdates.DateFormatter('%m-%d'))
             if window == 'Stage-I':
-                ax.axvline(pd.Timestamp('2023-06-17 12:00'), color='0.4', linestyle='--', lw=0.8)
+                ax.axvline(pd.Timestamp('2023-06-18 00:00'), color='0.4', linestyle='--', lw=0.8)
             ax.set_title(f'({chr(97+row*2+col)}) {pd.Timestamp(init).day} Jun', loc='left')
             ax.set_ylabel(LABELS[factor] if col == 0 else '')
             style(ax)
@@ -103,8 +104,8 @@ def timeseries_figure(df, factors, window, version=None):
 
 def scatter_figure(df, version):
     fig, axes = plt.subplots(2, 2, figsize=(6.5, 5.9), dpi=600)
-    for row, init in enumerate(INITS):
-        for col, factor in enumerate(('sm_avg', 'partial_fitted_Tmax')):
+    for row, factor in enumerate(('sm_avg', 'partial_fitted_Tmax')):
+        for col, init in enumerate(INITS):
             ax = axes[row, col]
             all_versions = df[df.init_date == init]
             g = all_versions[all_versions.model_version == version]
