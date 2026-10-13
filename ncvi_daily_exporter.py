@@ -154,11 +154,27 @@ def load_pair(spec, init, hindcast=False):
     return merged.values,merged.step.values,audit
 
 
+def era5_reference_qc(config):
+    """Missing ERA5 blocks formal acceptance, not independent S2S replay."""
+    try:
+        csv=Path(config['era5_csv']); provenance=Path(config['era5_provenance'])
+        era=pd.read_csv(csv); era=era[pd.to_datetime(era.date).isin(DATES)]
+        ep=json.loads(provenance.read_text())
+        if len(era)!=11 or era.date.duplicated().any() or not np.isfinite(era.ncvi_theta320_anom_pvu).all() or ep['csv_sha256']!=digest(csv) or ep['units']!='PVU' or ep['level_K']!=320 or not ep['climatology_sources'] or not ep['baseline_period']:
+            raise ValueError('ERA5 coverage/climatology provenance invalid')
+        return {'status':'PASS','reason':'Coverage and supplied provenance verified','fields':list(era.columns)}
+    except (OSError,ValueError,KeyError,TypeError,AttributeError) as exc:
+        return {'status':'FAIL','reason':str(exc)}
+
+
 def export(config):
     """Always save failed replay evidence; formal consumer requires all gates PASS."""
     out=Path(config['output_root'])
     if out.exists():raise ValueError('Output root must not exist; history is protected')
-    paths={k:Path(config[k]) for k in ['stage_table','design_table','comparison_manifest','era5_csv','era5_provenance']}
+    paths={k:Path(config[k]) for k in ['stage_table','design_table','comparison_manifest']}
+    era_qc=era5_reference_qc(config)
+    for key in ['era5_csv','era5_provenance']:
+        if config.get(key) and Path(config[key]).is_file(): paths[key]=Path(config[key])
     manifest=json.loads(paths['comparison_manifest'].read_text())
     if digest(paths['stage_table'])!=next(p['sha256'] for p in manifest['provenance'] if p['name']=='ncvi') or digest(paths['design_table'])!=manifest['table_sha256']['table_mlr_design_members.csv']:
         raise ValueError('Saved-model provenance hash mismatch')
@@ -169,10 +185,6 @@ def export(config):
     design=pd.read_csv(paths['design_table']);q=design[(design.predictor=='NCVI_concurrent')&design.init_date.isin(INITS)&design.window.isin(['Stage-I','Total'])].merge(ref,on=['init_date','window','member'],validate='many_to_one')
     if len(q)!=408 or q.version.nunique()!=2 or not np.allclose(q.value,q.NCVI_concurrent,rtol=0,atol=ATOL):
         raise ValueError('MLR design differs from concurrent stage table')
-    era=pd.read_csv(paths['era5_csv']);era=era[pd.to_datetime(era.date).isin(DATES)]
-    ep=json.loads(paths['era5_provenance'].read_text())
-    if len(era)!=11 or era.date.duplicated().any() or not np.isfinite(era.ncvi_theta320_anom_pvu).all() or ep['csv_sha256']!=digest(paths['era5_csv']) or ep['units']!='PVU' or ep['level_K']!=320 or not ep['climatology_sources'] or not ep['baseline_period']:
-        raise ValueError('ERA5 coverage/climatology provenance invalid')
     daily=[];clim=[];qc=[];audit=[]
     for init in INITS:
         spec=config['sources'][init]
@@ -187,13 +199,17 @@ def export(config):
         d,c,q=daily_replay(init,rt,rs,hc,hs,ref);daily.append(d);clim.append(c);qc.append(q);audit+=ra+ha
     d,c,q=pd.concat(daily),pd.concat(clim),pd.concat(qc)
     if len(d)!=1122 or d.duplicated(['init_date','date','member']).any() or len(q)!=204:raise ValueError('Export coverage invalid')
-    passed=bool(q.scalar_pass.all() and q.daily_pass.all())
-    d['qc_status']='PASS' if passed else 'FAIL_STAGE_EQUIVALENCE'
+    s2s_pass=bool(q.scalar_pass.all() and q.daily_pass.all())
+    passed=s2s_pass and era_qc['status']=='PASS'
+    d['qc_status']='PASS' if passed else ('FAIL_ERA5_REFERENCE' if s2s_pass else 'FAIL_STAGE_EQUIVALENCE')
     out.mkdir(parents=True,exist_ok=False)
     tables={'table_ncvi_concurrent_daily_members.csv':d,'table_ncvi_daily_climatology.csv':c,'table_ncvi_daily_source_audit.csv':pd.DataFrame(audit),'table_ncvi_daily_stage_replay_qc.csv':q}
     for name,table in tables.items():table.to_csv(out/name,index=False)
     commit=subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()
-    record={'status':'PASS' if passed else 'FAIL_STAGE_EQUIVALENCE','formal_process_allowed':passed,'atol':ATOL,'code_commit':commit,
+    record={'status':'PASS' if passed else ('FAIL_ERA5_REFERENCE' if s2s_pass else 'FAIL_STAGE_EQUIVALENCE'),
+            's2s_daily_source_qc':{'status':'PASS','reason':'Strict GRIB source checks passed'},
+            's2s_stage_replay_qc':{'status':'PASS' if s2s_pass else 'FAIL','reason':'Scalar, equal-day and time-weighted comparisons at fixed 1e-8 PVU'},
+            'era5_reference_qc':era_qc,'formal_process_allowed':passed,'atol':ATOL,'code_commit':commit,
             'code_sha256':digest(__file__),'config':config,'inputs':{k:{'path':str(p),'sha256':digest(p)} for k,p in paths.items()},
             'outputs':{n:digest(out/n) for n in tables},'max_scalar_difference':float(q.scalar_difference.abs().max()),
             'max_daily_difference':float(q.daily_difference.abs().max()),'max_weighted_difference':float(q.weighted_difference.abs().max()),
