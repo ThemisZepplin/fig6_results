@@ -178,6 +178,10 @@ def importance_figure(data, plan, window, version):
             vals = g.importance_pct.to_numpy()
             ax.barh(np.arange(6), vals, color=COLORS[method], alpha=0.88, height=0.66)
             ax.set_yticks(np.arange(6), [LABELS[n] for n in g.predictor], fontsize=8.0)
+            # Slightly emphasize factor names in the first column.
+            if col == 0:
+                for tick in ax.get_yticklabels():
+                    tick.set_fontweight('semibold')
             ax.tick_params(axis='y', which='both', left=False, right=False, labelleft=(col == 0))
             ax.invert_yaxis()
             ax.set_xlim(0, plan['bars'][method])
@@ -275,7 +279,7 @@ def pdf_importance_qc(path):
     try:
         import fitz
     except ImportError as exc:
-        raise RuntimeError('Layout v2 PDF QA requires PyMuPDF: pip install pymupdf') from exc
+        raise RuntimeError('PDF layout QA requires PyMuPDF: pip install pymupdf') from exc
     with fitz.open(path) as doc:
         page = doc[0]
         lines, sizes = [], []
@@ -321,7 +325,7 @@ def make_figures(data, plan, kind):
                     if qc['alignment_status'] != 'PASS':
                         qc['status'] = 'FAIL'
                 qc.update({'figure': f'Fig{number}', 'window': window, 'version': version,
-                           'basename': f'Fig{number}_{stem}_{version}' + ('_layout_v2' if kind == 'importance' else ''),
+                           'basename': f'Fig{number}_{stem}_{version}' + ('_layout_v3' if kind == 'importance' else ''),
                            'axes': [{'xlim': list(a.get_xlim()), 'ylim': list(a.get_ylim()),
                                      'xticks': a.get_xticks().tolist(), 'yticks': a.get_yticks().tolist()} for a in axes]})
                 built.append({'fig': fig, 'qc': qc})
@@ -333,7 +337,7 @@ def save_figures(built, input_root, output_root):
     numbers = {b['qc']['figure'] for b in built}
     if (len(built), numbers) not in [(8, {'Fig3', 'Fig4', 'Fig9', 'Fig10'}),
                                    (4, {'Fig4', 'Fig10'})]:
-        raise ValueError('Expected all eight figures or the four layout-v2 importance figures')
+        raise ValueError('Expected all eight figures or the four layout-v3 importance figures')
     # Verify the final raw/resid axes and actual ticks rather than merely intentions.
     for number in (3, 4, 9, 10):
         if f'Fig{number}' not in numbers:
@@ -342,13 +346,13 @@ def save_figures(built, input_root, output_root):
         if len(pair) != 2 or pair[0]['qc']['axes'] != pair[1]['qc']['axes']:
             raise ValueError(f'Raw/residualized axes mismatch Fig{number}')
     qcs = [b['qc'] for b in built]
-    if any(q['figure'] in ('Fig4', 'Fig10') and not q['basename'].endswith('_layout_v2') for q in qcs):
-        raise ValueError('Importance exports must use layout_v2 names to preserve prior formal figures')
+    if any(q['figure'] in ('Fig4', 'Fig10') and not q['basename'].endswith('_layout_v3') for q in qcs):
+        raise ValueError('Importance exports must use layout_v3 names to preserve prior formal figures')
     (out / 'qc').mkdir(parents=True, exist_ok=True)
-    qc_path = out / 'qc/figure_layout_v2_qc.json'
+    qc_path = out / 'qc/figure_layout_v3_qc.json'
     qc_path.write_text(json.dumps(qcs, indent=2), encoding='utf-8')
     if any(q['status'] != 'PASS' for q in qcs):
-        raise ValueError('Rendered figure layout QC failed; inspect figure_layout_v2_qc.json. No figure files exported.')
+        raise ValueError('Rendered figure layout QC failed; inspect figure_layout_v3_qc.json. No figure files exported.')
     (out / 'figures').mkdir(parents=True, exist_ok=True)
     manifest = []
     for b in built:
@@ -390,5 +394,5 @@ def save_figures(built, input_root, output_root):
                          'png_sha256': hashlib.sha256(png.read_bytes()).hexdigest(),
                          'pdf_sha256': hashlib.sha256(pdf.read_bytes()).hexdigest(), 'status': 'PASS'})
         plt.close(fig)
-    pd.DataFrame(manifest).to_csv(out / 'qc/table_figure_layout_v2_manifest.csv', index=False)
+    pd.DataFrame(manifest).to_csv(out / 'qc/table_figure_layout_v3_manifest.csv', index=False)
     return pd.DataFrame(manifest)

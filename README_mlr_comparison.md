@@ -1,5 +1,11 @@
 # Final MLR raw versus residualized comparison
 
+The current Fig.4/10 microrevision keeps 8 pt factor names and applies semibold
+only in the first column. It exports `_layout_v3` figure filenames and
+`figure_layout_v3_qc.json` / `table_figure_layout_v3_manifest.csv`; the v2 figures
+and QC described below remain preserved for comparison. All other layout and
+numerical definitions are unchanged.
+
 Open `mlr_raw_residual_comparison.ipynb`, configure paths in its first code cell,
 then Restart Kernel → Run All. After numerical QC passes, open
 `mlr_comparison_figures.ipynb` and Restart Kernel → Run All with the same paths.

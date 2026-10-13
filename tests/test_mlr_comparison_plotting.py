@@ -77,14 +77,14 @@ def test_rendered_layout_axes_and_exports(render_input):
     assert (manifest.png_width_px == 3900).all()
     assert len(list((out / 'figures').glob('*.png'))) == 8
     assert len(list((out / 'figures').glob('*.pdf'))) == 8
-    qcs = json.loads((out / 'qc/figure_layout_v2_qc.json').read_text())
+    qcs = json.loads((out / 'qc/figure_layout_v3_qc.json').read_text())
     for num in (3, 4, 9, 10):
         p = [q for q in qcs if q['figure'] == f'Fig{num}']
         assert p[0]['axes'] == p[1]['axes']
         if num in (4, 10):
             assert all(q['pdf_status'] == 'PASS' and q['pdf_min_font_pt'] >= 7.5 and
                        q['pdf_editable_vector_text'] and q['pdf_percentage_labels'] == 72 for q in p)
-            assert all(q['basename'].endswith('_layout_v2') for q in p)
+            assert all(q['basename'].endswith('_layout_v3') for q in p)
     # PDF MediaBox may be compressed in other backends; matplotlib emits it plain.
     import re
     for pdf in (out / 'figures').glob('*.pdf'):
@@ -111,6 +111,21 @@ def test_short_and_zero_bars_keep_true_lengths(render_input):
     plotting.plt.close(fig)
 
 
+def test_only_first_column_factor_labels_are_semibold_at_eight_points(render_input):
+    _, _, data, plan = render_input
+    built = plotting.make_figures(data, plan, 'importance')
+    for item in built:
+        assert item['qc']['status'] == 'PASS', item['qc']
+        for index, ax in enumerate(item['fig'].axes):
+            labels = [tick.label1 for tick in ax.yaxis.get_major_ticks()]
+            assert len(labels) == 6
+            assert all(label.get_fontsize() == 8.0 for label in labels)
+            assert all(label.get_fontweight() == ('semibold' if index % 4 == 0 else 'normal')
+                       for label in labels)
+            assert all(label.get_visible() == (index % 4 == 0) for label in labels)
+        plotting.plt.close(item['fig'])
+
+
 def test_wrong_reference_order_is_rejected(render_input):
     _, _, data, _ = render_input
     data = dict(data)
@@ -124,16 +139,22 @@ def test_wrong_reference_order_is_rejected(render_input):
         plotting.figure_plan(data)
 
 
-def test_v2_export_preserves_old_figures_and_numerical_tables(render_input):
+def test_v3_export_preserves_old_figures_and_numerical_tables(render_input):
     inp, out, data, plan = render_input
     import hashlib
-    old = out / 'figures/Fig4_Total_raw.png'
+    old = out / 'figures/Fig4_Total_raw_layout_v2.png'
     old.write_bytes(b'old formal figure sentinel')
+    old_files = [out / 'figures/Fig4_Total_raw_layout_v2.pdf',
+                 out / 'qc/figure_layout_v2_qc.json',
+                 out / 'qc/table_figure_layout_v2_manifest.csv']
+    for path in old_files:
+        path.write_bytes(b'preserved v2 sentinel')
     table_hashes = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in (out / 'tables').glob('*.csv')}
     manifest_bytes = (out / 'qc/comparison_manifest.json').read_bytes()
     built = plotting.make_figures(data, plan, 'importance')
     plotting.save_figures(built, inp, out)
     assert old.read_bytes() == b'old formal figure sentinel'
+    assert all(path.read_bytes() == b'preserved v2 sentinel' for path in old_files)
     assert table_hashes == {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in (out / 'tables').glob('*.csv')}
     assert manifest_bytes == (out / 'qc/comparison_manifest.json').read_bytes()
 
