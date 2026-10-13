@@ -19,6 +19,7 @@ def test_selfcontained_and_explicit_diagnostic_contract():
     whole=''.join(''.join(c['source']) for c in n['cells'])
     assert "'formal_process_allowed':False" in whole and 'table_ncvi_concurrent_daily_members.csv' in whole
     assert 'daily_ncvi_anomaly_pvu' in whole and "if factor=='NCVI_concurrent':continue" in whole
+    assert 'load_era5_ncvi_reference' in whole and 'PLOTTED_PROVENANCE_PENDING' in whole
     for c in n['cells']:
         assert c['execution_count'] is None and not c['outputs']
         for x in ast.walk(ast.parse(''.join(c['source']))):
@@ -155,3 +156,51 @@ def test_daily_markers_land_exactly_on_labelled_ticks_and_scatter_stats_use_righ
             assert text_boxes[0].get_position()[0] >= .95
             assert text_boxes[0].get_ha()=='right'
         plt.close(fig)
+
+
+def test_era5_ncvi_loader_rejects_ambiguous_missing_days_and_bad_units(tmp_path):
+    """Execute the actual Cell3 loader with mocked file and independently audited shape."""
+    tree=ast.parse(''.join(nb()['cells'][2]['source']))
+    fn=next(x for x in tree.body if isinstance(x,ast.FunctionDef)
+            and x.name=='load_era5_ncvi_reference')
+    import hashlib
+    env=dict(pd=pd,np=np,Path=Path,
+             finite=lambda x,description: np.asarray(x,dtype=float),
+             sha256=lambda path:hashlib.sha256(Path(path).read_bytes()).hexdigest())
+    exec(compile(ast.Module(body=[fn],type_ignores=[]),'era5_ncvi_loader','exec'),env)
+    run=env['load_era5_ncvi_reference']
+    dates=pd.date_range('2023-06-14','2023-06-24')
+    correct=pd.DataFrame(dict(date_bjt=dates,ncvi_anomaly_pvu=np.arange(11)/10,units=['PVU']*11))
+    path=tmp_path/'ncvi.csv';correct.to_csv(path,index=False)
+    daily,audit=run(path)
+    assert len(daily)==11 and audit['status']=='PLOTTED_PROVENANCE_PENDING'
+    assert audit['value_column']=='ncvi_anomaly_pvu'
+    assert audit['n_target_days']==11
+    bad=correct.copy();bad['ncvi_theta320_anomaly_pvu']=bad.ncvi_anomaly_pvu
+    bad.to_csv(path,index=False)
+    import pytest
+    with pytest.raises(ValueError,match='ambiguous'):run(path)
+    daily,audit=run(path,value_column='ncvi_anomaly_pvu')
+    assert len(daily)==11
+    bad=correct.iloc[:-1];bad.to_csv(path,index=False)
+    with pytest.raises(ValueError,match='exactly one'):run(path)
+    bad=correct.copy();bad.loc[3,'date_bjt']=bad.loc[2,'date_bjt'];bad.to_csv(path,index=False)
+    with pytest.raises(ValueError,match='exactly one'):run(path)
+    bad=correct.copy();bad['units']='m2/s2';bad.to_csv(path,index=False)
+    with pytest.raises(ValueError,match='PVU'):run(path)
+    bad=correct.copy();bad.loc[3,'ncvi_anomaly_pvu']='oops';bad.to_csv(path,index=False)
+    with pytest.raises((ValueError,TypeError)):run(path)
+    # An arbitrary numerical column is NEVER auto-accepted as an NCVI anomaly.
+    bad=pd.DataFrame(dict(date_bjt=dates,pv_absolute_pvu=np.arange(11)))
+    bad.to_csv(path,index=False)
+    with pytest.raises(ValueError,match='column ambiguous/missing'):run(path)
+
+
+def test_era5_ncvi_is_in_all_physical_and_missing_curve_is_fatal():
+    source=''.join(nb()['cells'][2]['source'])
+    fig=''.join(nb()['cells'][4]['source'])
+    assert 'all_physical=pd.concat([all_physical,era5_ncvi_long]' in source
+    assert "hashes['era5_ncvi']" in source
+    assert "if factor == 'NCVI_concurrent':" in fig
+    assert 'Mandatory ERA5 NCVI reference missing' in fig
+    assert "'era5_ncvi_source_qc':era5_ncvi_audit" in ''.join(nb()['cells'][5]['source'])
