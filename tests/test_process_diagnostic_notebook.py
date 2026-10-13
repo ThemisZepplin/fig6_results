@@ -85,3 +85,29 @@ def test_pdf_qc_rejects_size_and_small_body_and_classifies_scripts():
     assert env['pdf_page_qc'](Page(body=7),8.9)['status']=='FAIL'
     assert env['pdf_page_qc'](Page(script=4),8.9)['status']=='FAIL'
     assert env['pdf_page_qc'](Page(height=10.5),10.5)['status']=='FAIL'
+
+
+def test_cell4_member_diagnostic_branch_executes_dict_y(tmp_path):
+    source=''.join(nb()['cells'][3]['source'])
+    # Execute the actual notebook branch from stage-input loading through pairing.
+    branch=source[source.index('stage_members=pd.read_csv(STAGE)'):source.index('for variable in FACTORS11:')]
+    stage=pd.DataFrame([dict(init_date=init,stage='Stage-I',member=m,y_tmax=30+m*.1,sm_avg=.15+m*.001,SHF_Avg=50+m) for init in ['2023-06-08','2023-06-12'] for m in range(51)])
+    path=tmp_path/'stage.csv';stage.to_csv(path,index=False)
+    groups=stage[['init_date','member']].copy();groups['window']='Stage-I';groups['group']=['Hot17' if m<17 else 'Middle17' if m<34 else 'Cold17' for m in groups.member]
+    calls=[]
+    def parameters(data,init,version):
+        calls.append((init,version))
+        return {'y':stage[stage.init_date==init].set_index('member').y_tmax.copy(),'version':version}
+    env=dict(np=np,pd=pd,STAGE=path,INITS=('2023-06-08','2023-06-12'),VERSIONS=('raw','residualized'),
+             normalize_window=lambda s:s,parameters=parameters,data={},current_groups=groups,
+             residual_relation=lambda data,init:(0.,1.),
+             partial_fitted_tmax=lambda sm,shf,model,relation:(np.asarray(sm)+np.asarray(shf)+(1 if model['version']=='raw' else 0),np.asarray(shf)))
+    exec(compile(branch,'actual-cell4-member-branch','exec'),env)
+    assert len(calls)==4 and len(env['scatter_table'])==204
+    assert 'atol=1e-8' in branch
+    import pytest
+    def mismatched_parameters(data,init,version):
+        result=parameters(data,init,version);result['y']=result['y']+.001;return result
+    env['parameters']=mismatched_parameters
+    with pytest.raises(ValueError,match='target/model mismatch'):
+        exec(compile(branch,'actual-cell4-member-branch','exec'),env)
