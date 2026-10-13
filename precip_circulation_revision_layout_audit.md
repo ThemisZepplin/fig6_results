@@ -101,3 +101,53 @@ Server-confirmed daily products remain valid existing inputs, but their real
 cache files are not mounted here. Neither real Fig.6 nor real Fig.S6 PNG/PDF
 was redrawn or visually verified in this environment. Server checks of actual
 latitude-label clearance, row/colorbar spacing and final PNG/PDF remain pending.
+
+## TP hatch and contour-label visual follow-up
+
+Reference principles: nature-figure README
+https://github.com/Yuan1z0825/nature-skills/blob/main/skills/nature-figure/README.md
+(final-size hierarchy, full text extents, alignment and collision review).
+Submission sizes and layout remain JGR/AGU; no Nature-specific resizing or
+new figure contract is applied.
+
+Only three final renderers, the existing layout test and these usage/audit
+documents change. The daily compact layout, seven-panel Hovmöller layout,
+leadtime/observation structure, fonts, levels, ticks, colorbars and output
+filenames are retained. Science scripts, all validation methods, masks,
+NetCDF/QC values and grouping inputs are unchanged.
+
+TP hatch linewidth changes from 0.45 to 0.60. Black `...`, transparent fills,
+local significant_local_p005, mask extent/density and overlay zorders stay the
+same. Matplotlib 3.10.8 Collection stores `_hatch_linewidth` at creation; the
+PDF hatch pattern uses that artist/graphics-context value. Creation and final
+draw/savefig both run inside local rc_context, covering older draw-time readers
+as well. No global hatch rc setting is changed. Tests decoded synthetic PDF
+streams and confirmed `0.6 w`; artist width and rc restoration also passed.
+Older Matplotlib versions were not installed/tested separately.
+
+Contour geometry/levels/color/style/width, selected label levels, sign format,
+font size and the 5880 feature line remain unchanged. Clabel is deferred until
+each figure's final layout. Candidates are sampled along actual contour paths,
+then clabel snaps anchors to those paths; accepted labels are checked for the
+requested level and full rotated text extents plus the existing 3.2-pt stroke.
+Placement avoids panel-edge clipping, existing text/panel labels and reference
+line paths including NCHN and 114/119E. Actual contour/text intersection is
+intentional and is not reported as a collision. No free text translation is
+used. Non-inline placement preserves continuous paths, so discarded trials
+never leave unnumbered breaks. At most one label per selected level/panel is
+kept; a no-space contour is retained and the omitted label is explicitly logged.
+After final draw, accepted labels are checked again for clipping and collisions.
+
+Validation: four changed Python files pass py_compile; nine identity tests and
+five static/layout/visual tests pass; Jupyter snippets compile and git diff
+--check passes. Synthetic PNG/PDF tests run identical helpers from each script,
+confirm effective PDF hatch width, all signed test levels, on-contour anchors,
+unchanged path vertices and rc restoration. They verify rendering mechanisms,
+not real scientific figures or dark-fill readability.
+
+No true cache inputs or final scientific PDFs are mounted in this executor.
+Not completed: real Fig.6, Fig.S6, Fig.7 and Fig.9 redraws; final-size dark-fill
+contrast and geographic contour/text collision review; nature-figure PDF font
+and collision audit of the real deliverables; per-case review of intentional
+map text/contour overlays. Synthetic PDFs were used only for hatch mechanism
+checks and cannot replace these real-figure acceptance items.

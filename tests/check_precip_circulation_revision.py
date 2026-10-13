@@ -106,6 +106,69 @@ class RevisionChecks(unittest.TestCase):
                  if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)]
         self.assertEqual(calls, ["plot_fig6_from_cache"])
 
+    def test_visual_helpers_contour_paths_and_effective_pdf_hatch_width(self):
+        import tempfile
+        import re
+        import zlib
+        import numpy as np
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        import matplotlib.patheffects as pe
+        names = {"_queue_contour_labels", "_place_contour_labels", "_save_visual_figure"}
+        for tag in ("fig7", "fig8", "fig9"):
+            tree = ast.parse((ROOT / f"paper_{tag}_from_cache.py").read_text())
+            nodes = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name in names]
+            ns = {"np": np, "plt": plt, "pe": pe, "FONT_CONTOUR_LABEL": 8.5,
+                  "TP_HATCH_LINEWIDTH": .60}
+            exec(compile(ast.Module(body=nodes, type_ignores=[]), "visual-helpers", "exec"), ns)
+            fig, ax = plt.subplots(figsize=(3, 3))
+            x = np.linspace(0, 10, 80)
+            xx, yy = np.meshgrid(x, x)
+            cs = ax.contour(xx, yy, 50 * np.sin(xx / 3) + yy * 5 - 50,
+                            levels=[-40, -20, 20, 40])
+            before = [[segment.copy() for segment in level] for level in cs.allsegs]
+            ax.text(.02, .97, "(a)", transform=ax.transAxes, va="top")
+            ax.axvline(4, color="black")
+            ns["_queue_contour_labels"](ax, cs)
+            original_rc = plt.rcParams["hatch.linewidth"]
+            with plt.rc_context({"hatch.color": "black", "hatch.linewidth": .60}):
+                hatch = ax.contourf(xx, yy, np.ones_like(xx), levels=[.5, 1.5],
+                                    colors="none", hatches=["..."], zorder=12)
+            if hasattr(hatch, "get_hatch_linewidth"):
+                self.assertAlmostEqual(hatch.get_hatch_linewidth(), .60)
+            with tempfile.TemporaryDirectory() as tmp:
+                stem = str(Path(tmp) / tag)
+                ns["_save_visual_figure"](fig, stem)
+                self.assertTrue(Path(stem + ".png").is_file())
+                pdf = Path(stem + ".pdf").read_bytes()
+                decoded = []
+                for stream in re.findall(rb"stream\r?\n(.*?)\r?\nendstream", pdf, re.S):
+                    try:
+                        decoded.append(zlib.decompress(stream))
+                    except zlib.error:
+                        pass
+                self.assertTrue(any(b"0.6 w" in stream for stream in decoded), "PDF hatch stroke width missing")
+            self.assertEqual(plt.rcParams["hatch.linewidth"], original_rc)
+            self.assertEqual({label.get_text() for label in cs.labelTexts}, {"-40", "-20", "20", "40"})
+            for old, new in zip(before, cs.allsegs):
+                for a, b in zip(old, new):
+                    np.testing.assert_array_equal(a, b)  # no inline contour cuts
+            # Label anchors must be on a segment of their own real contour level.
+            for label in cs.labelTexts:
+                index = list(cs.levels).index(float(label.get_text()))
+                point = np.asarray(label.get_position())
+                distances = []
+                for segment in cs.allsegs[index]:
+                    vectors = np.diff(segment, axis=0)
+                    length2 = (vectors * vectors).sum(axis=1)
+                    valid = length2 > 0
+                    starts, vectors, length2 = segment[:-1][valid], vectors[valid], length2[valid]
+                    fraction = np.clip(((point - starts) * vectors).sum(axis=1) / length2, 0, 1)
+                    distances.extend(np.linalg.norm(point - starts - fraction[:, None] * vectors, axis=1))
+                self.assertLess(min(distances), 1e-6)
+            plt.close(fig)
+
 
 if __name__ == "__main__":
     unittest.main()

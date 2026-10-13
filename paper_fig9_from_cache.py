@@ -41,6 +41,124 @@ plt.rcParams["pdf.fonttype"] = 42
 plt.rcParams["ps.fonttype"] = 42
 
 
+TP_HATCH_LINEWIDTH = 0.60
+
+
+def _queue_contour_labels(ax, contour, levels=None):
+    # Delay placement until Cartopy aspect and the individual figure layout settle.
+    if not hasattr(ax, "_pending_contour_labels"):
+        ax._pending_contour_labels = []
+    ax._pending_contour_labels.append((contour, contour.levels if levels is None else levels))
+
+
+def _place_contour_labels(fig):
+    from matplotlib.transforms import Bbox
+
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    # Text extents exclude path effects: include half the existing 3.2-pt stroke.
+    stroke_pad = (3.2 / 2 + 0.5) * fig.dpi / 72
+    separation = 1.5 * fig.dpi / 72
+    for ax in fig.axes:
+        pending = getattr(ax, "_pending_contour_labels", [])
+        if not pending:
+            continue
+        frame = ax.get_window_extent(renderer)
+        inner = Bbox.from_extents(frame.x0 + separation, frame.y0 + separation,
+                                 frame.x1 - separation, frame.y1 - separation)
+        occupied = []
+        for text in ax.texts:
+            if text.get_visible():
+                box = text.get_bbox_patch()
+                occupied.append((box if box is not None else text).get_window_extent(renderer).padded(separation))
+        # Deliberate contour intersections are allowed; avoid only drawn reference
+        # lines (NCHN box or 114/119E), not the actual contour carrying the number.
+        references = [line.get_transform().transform_path(line.get_path())
+                      for line in ax.lines if line.get_visible()]
+        for contour, levels in pending:
+            for level in levels:
+                index = int(np.flatnonzero(np.isclose(contour.levels, level))[0])
+                segments = sorted(contour.allsegs[index], key=len, reverse=True)
+                placed = False
+                for segment in segments:
+                    if len(segment) < 2:
+                        continue
+                    points = contour.get_transform().transform(segment)
+                    distance = np.r_[0., np.cumsum(np.linalg.norm(np.diff(points, axis=0), axis=1))]
+                    if not np.isfinite(points).all() or distance[-1] == 0:
+                        continue
+                    # Try center first, then progressively more peripheral sites.
+                    for fraction in sorted(np.linspace(.08, .92, 29), key=lambda f: abs(f - .5)):
+                        target = fraction * distance[-1]
+                        j = min(np.searchsorted(distance, target, side="right") - 1, len(points) - 2)
+                        length = distance[j + 1] - distance[j]
+                        if length <= 0:
+                            continue
+                        pixel = points[j] + (points[j + 1] - points[j]) * ((target - distance[j]) / length)
+                        if not inner.contains(*pixel):
+                            continue
+                        position = ax.transData.inverted().transform(pixel)
+                        previous = len(contour.labelTexts)
+                        ax.clabel(contour, manual=[position],
+                                  fmt="%.0f", fontsize=FONT_CONTOUR_LABEL, inline=False)
+                        if len(contour.labelTexts) == previous:
+                            continue
+                        text = contour.labelTexts[-1]
+                        text.set_path_effects([pe.withStroke(linewidth=3.2, foreground="white")])
+                        bounds = text.get_window_extent(renderer).padded(stroke_pad)
+                        clear = (text.get_text() == ("%.0f" % level)
+                                 and inner.contains(bounds.x0, bounds.y0)
+                                 and inner.contains(bounds.x1, bounds.y1)
+                                 and not any(bounds.overlaps(box) for box in occupied)
+                                 and not any(path.intersects_bbox(bounds.padded((3.4 / 2 + 1.5) * fig.dpi / 72), filled=False)
+                                             for path in references))
+                        if clear:
+                            text._final_contour_label = True
+                            occupied.append(bounds.padded(separation))
+                            placed = True
+                            break
+                        # Non-inline labels never cut the contour, including rejected trials.
+                        text.remove()
+                        contour.labelTexts.pop()
+                        contour.labelCValues.pop()
+                    if placed:
+                        break
+                if not placed:
+                    print(f"[Contour labels] level={level:g}: no safe on-contour location; contour retained")
+        ax._pending_contour_labels = []
+    # Check all accepted labels again after the final canvas draw, including stroke.
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    for ax in fig.axes:
+        accepted = [text for text in ax.texts if getattr(text, "_final_contour_label", False)]
+        occupied = []
+        for text in ax.texts:
+            if text not in accepted and text.get_visible():
+                patch = text.get_bbox_patch()
+                occupied.append((patch if patch is not None else text).get_window_extent(renderer).padded(separation))
+        references = [line.get_transform().transform_path(line.get_path())
+                      for line in ax.lines if line.get_visible()]
+        for text in accepted:
+            box = text.get_window_extent(renderer).padded(stroke_pad)
+            frame = ax.get_window_extent(renderer)
+            if not (frame.contains(box.x0, box.y0) and frame.contains(box.x1, box.y1)):
+                raise ValueError("Final stroked contour label is clipped")
+            if (any(box.overlaps(other) for other in occupied)
+                    or any(path.intersects_bbox(box.padded((3.4 / 2 + 1.5) * fig.dpi / 72), filled=False)
+                           for path in references)):
+                raise ValueError("Final stroked contour label collides with text or reference line")
+            occupied.append(box.padded(separation))
+
+
+def _save_visual_figure(fig, stem):
+    # Creation context covers versions caching artist hatch width; this context
+    # also covers versions/backends reading rcParams at draw or save time.
+    with plt.rc_context({"hatch.color": "black", "hatch.linewidth": TP_HATCH_LINEWIDTH}):
+        _place_contour_labels(fig)
+        fig.savefig(stem + ".png", dpi=600)
+        fig.savefig(stem + ".pdf")
+
+
 def _fig9_setup_map(ax):
     ax.set_extent(FIG9_MAP_EXTENT, crs=ccrs.PlateCarree())
     ax.coastlines(linewidth=0.5)
@@ -141,7 +259,7 @@ def _fig9_contour_abs(ax, z):
     levels = levels[(levels >= float(z.min())) & (levels <= float(z.max()))]
     if levels.size:
         cs = ax.contour(z[lon_dim], z[lat_dim], z, levels=levels, colors="0.12", linewidths=1.1, transform=ccrs.PlateCarree())
-        _fig9_effects(ax.clabel(cs, fmt="%.0f", fontsize=FONT_CONTOUR_LABEL, inline=True))
+        _queue_contour_labels(ax, cs)
     if float(z.min()) <= 5880 <= float(z.max()):
         ax.contour(z[lon_dim], z[lat_dim], z, levels=[5880], colors="purple", linewidths=1.5, transform=ccrs.PlateCarree())
 
@@ -155,8 +273,8 @@ def _fig9_contour_diff(ax, z):
         csp = ax.contour(z[lon_dim], z[lat_dim], z, levels=base, colors="firebrick", linewidths=1.05, transform=ccrs.PlateCarree())
         labs = base[base >= 20]
         if labs.size:
-            _fig9_effects(ax.clabel(csn, levels=-labs[::-1], fmt="%.0f", fontsize=FONT_CONTOUR_LABEL, inline=True))
-            _fig9_effects(ax.clabel(csp, levels=labs, fmt="%.0f", fontsize=FONT_CONTOUR_LABEL, inline=True))
+            _queue_contour_labels(ax, csn, -labs[::-1])
+            _queue_contour_labels(ax, csp, labs)
 
 
 def _fig9_plot_abs(ax, tp, z, levels, title=""):
@@ -230,7 +348,7 @@ def _fig9_overlay_tp_significance(ax, mask: xr.DataArray) -> None:
     sig = mask.astype(bool)
     if not bool(sig.any().item()):
         return
-    with plt.rc_context({"hatch.color": "black", "hatch.linewidth": 0.45}):
+    with plt.rc_context({"hatch.color": "black", "hatch.linewidth": TP_HATCH_LINEWIDTH}):
         ax.contourf(
             sig.s2s_lon, sig.s2s_lat, sig.astype(float), levels=[0.5, 1.5],
             colors="none", hatches=["..."], transform=ccrs.PlateCarree(), zorder=12,
@@ -317,8 +435,7 @@ def plot_fig9_from_cache(
     cbar_diff.ax.tick_params(labelsize=FONT_COLORBAR_TICK, pad=1)
     cbar_diff.set_label("Hot17 − Cold17 precipitation (mm day$^{-1}$)", fontsize=FONT_COLORBAR_LABEL, labelpad=2)
     stem = os.path.join(out_dir, "fig9_leadtime_tp_z500_composites")
-    fig.savefig(stem + ".png", dpi=600)
-    fig.savefig(stem + ".pdf")
+    _save_visual_figure(fig, stem)
     plt.close(fig)
     tp_sig.close()
     return stem + ".png", stem + ".pdf"

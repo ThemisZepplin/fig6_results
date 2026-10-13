@@ -210,3 +210,47 @@ explicit init and group-member metadata. Cache variables, dates, units and
 Total grouping are checked. Wrong init, window, coordinates or composite
 differences fail instead of silently mixing fields. Keep the grouping file
 unchanged between exports of the paired initializations.
+
+## TP hatch / contour-label style update: redraw four final figures only
+
+Update the disk copies of all three `paper_fig*_from_cache.py` scripts before
+using runpy. Do not load science cells or call any export function for this
+style revision. Reuse the existing plot-ready caches and TP significance.
+After verifying each figure's inputs, explicitly call each entry separately:
+
+```python
+figures = runpy.run_path(str(repo / 'paper_precip_circulation_revision_from_cache.py'))
+fig6_paths = figures['plot_fig6_from_cache']()
+print('Fig.6:', fig6_paths)
+figS6_paths = figures['plot_figS6_from_cache']()
+print('Fig.S6:', figS6_paths)
+fig7_paths = figures['plot_fig7_from_cache']()
+print('Fig.7 Hovmöller:', fig7_paths)
+fig9_paths = figures['plot_fig9_from_cache']()
+print('Fig.9:', fig9_paths)
+```
+
+Each entry renders only its own figure. If inputs are missing or validation
+fails, stop and investigate the named product; do not export automatically or
+substitute another initialization. Fig.7 still requires both Hovmöller inits,
+independent of the daily-map files. All output names and figure layouts remain.
+
+For full-cell paste use, paste the latest complete corresponding plotting file
+and invoke `plot_fig6_from_cache()` / `plot_figS6_from_cache()` (daily script),
+`plot_fig7_hovmoller_from_cache()` (Hovmöller script), or
+`plot_fig9_from_cache()` (leadtime script). The visual helpers are intentionally
+included in each file: no new project-local module is required. Existing
+Matplotlib supplies the geometry helper; scipy/statistics are not recomputed.
+
+Black dotted hatching remains the local two-sided Welch p < 0.05 mask, with
+17 members per group and no multiple-comparison correction for the displayed
+markers. Hatch density, pattern, covered area and order are unchanged; 0.60 pt
+is the updated stroke default. The number of hatch dots is not a count of
+significant grid points. Labels use the same number format, font and white
+stroke; placement occurs on actual contour paths after layout draw. One safe
+label per selected contour level/panel avoids redundant repetitions. Contours
+with no safe location are retained with an explicit placement log.
+
+Until the four real figures are redrawn at their final JGR/AGU dimensions,
+0.60 pt is a proposed default rather than verified dark-fill readability.
+Inspect real PNG/PDF for label clipping/collisions and dark-fill contrast.
