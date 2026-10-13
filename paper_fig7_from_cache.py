@@ -1,6 +1,7 @@
-"""Plot paper Fig.7 from a plot-ready NetCDF cache only."""
+"""Final Fig.6/Fig.S6 daily maps; historical filename retained for compatibility."""
 
 import os
+from datetime import datetime
 from typing import Sequence, Tuple
 
 import numpy as np
@@ -37,8 +38,29 @@ plt.rcParams["ps.fonttype"] = 42
 
 
 
+def _initialization_from_attrs(attrs):
+    """Resolve a valid date by precedence, never by filename or plotted dates."""
+    invalid = []
+    for key in ("initialization", "init_date", "main_init_date"):
+        value = attrs.get(key)
+        if value is None:
+            continue
+        if isinstance(value, bytes):
+            value = value.decode("utf-8", errors="replace")
+        text = str(value).strip()
+        if not text:
+            continue
+        try:
+            return datetime.fromisoformat(text.replace("Z", "+00:00")).date().isoformat()
+        except ValueError:
+            invalid.append(key)
+    if invalid:
+        raise ValueError(f"No valid initialization metadata in {invalid}")
+    return None
+
+
 def _validate_identity(ds, init_date, start, end, time_coord):
-    declared = ds.attrs.get("initialization", ds.attrs.get("main_init_date"))
+    declared = _initialization_from_attrs(ds.attrs)
     if declared != init_date:
         raise ValueError(f"Cache initialization {declared!r} differs from {init_date}")
     if ds.attrs.get("grouping_stage") != "Total":
@@ -67,8 +89,10 @@ def _validate_identity(ds, init_date, start, end, time_coord):
             raise ValueError("Hot and Cold members overlap")
 
 def _validate_pair(cache, sig, init_date):
-    # Historical June 12 spatial exports lack initialization metadata.
-    declared = sig.attrs.get("initialization", "2023-06-12")
+    declared = _initialization_from_attrs(sig.attrs)
+    # Preserve historical June 12-only compatibility, never infer June 8.
+    if declared is None and init_date == "2023-06-12":
+        declared = "2023-06-12"
     if declared != init_date or sig.attrs.get("grouping_stage") != "Total":
         raise ValueError("TP significance initialization/grouping mismatch")
     if sig.attrs.get("units") != "mm day^-1":
@@ -258,6 +282,8 @@ def plot_fig6_from_cache(
     z500_significance_path: str = FIG7_SIGNIFICANCE_Z500,
     initialization: str = "2023-06-12",
 ):
+    if initialization not in ("2023-06-08", "2023-06-12"):
+        raise ValueError("Daily final figures support June 8 and June 12 only")
     os.makedirs(out_dir, exist_ok=True)
     with xr.open_dataset(cache_path) as source:
         ds = source.load()
@@ -267,7 +293,8 @@ def plot_fig6_from_cache(
     tp_sig = _fig7_open_significance(tp_significance_path, "TP")
     _validate_pair(ds, tp_sig, initialization)
     _fig7_validate_significance(ds, tp_sig)
-    print("[Fig7 local significance] local two-sided Welch t-test p < 0.05")
+    figure_label = "Fig.S6" if initialization == "2023-06-08" else "Fig.6"
+    print(f"[{figure_label} TP local significance] two-sided Welch p < 0.05; init={initialization}")
     for c, date in enumerate(ds.date.values):
         tp_count = int(tp_sig.significant_local_p005.isel(date=c).astype(bool).sum().item())
         print(f"{np.datetime_as_string(date, unit='D')}: TP={tp_count}")

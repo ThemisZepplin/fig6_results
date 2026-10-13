@@ -1653,7 +1653,7 @@ The tests quantify conditional differences between the predefined Hot17 and Cold
 
 ## Caption supplement
 
-Stippling indicates time-longitude cells where the Hot17-Cold17 precipitation difference is locally significant at p < 0.05 based on a two-sided Welch's t test. Archived Z500 contours indicate portions of the corresponding geopotential-height difference satisfying the same local significance criterion. Tests were conducted separately for precipitation and Z500 using the 17 members in each predefined group at each time-longitude cell.
+Stippling indicates time-longitude cells where the Hot17-Cold17 precipitation difference is locally significant at p < 0.05 based on a two-sided Welch's t test. Ordinary labeled Z500 difference contours are retained without displaying Z500 significance. Independent Z500 test results remain archived for traceability. Tests were conducted separately for precipitation and Z500 using the 17 members in each predefined group at each time-longitude cell.
 """
     with open(FIG8_SIGNIFICANCE_AUDIT_PATH, "w", encoding="utf-8") as handle:
         handle.write(text)

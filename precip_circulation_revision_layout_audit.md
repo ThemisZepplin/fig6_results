@@ -47,3 +47,23 @@ cannot be reached. GitHub connector reads supplied the latest branch and exact
 base objects, verified by Git hashes; publication uses GitHub Git-data APIs
 and a normal fast-forward ref update. No reset, force push, merge, or deletion
 is used. The local base and GitHub commit provenance remain reviewable.
+
+## PR #13 legacy initialization compatibility follow-up
+
+Both daily and Hovmöller final renderers now resolve the first valid date in
+`initialization`, `init_date`, `main_init_date` order for cache and TP tests.
+A valid incorrect primary date fails; legacy June 8 `init_date` takes priority
+over stale June 12 `main_init_date`. Missing metadata cannot identify June 8.
+No original science processing or NetCDF values were changed. Daily audit
+removed nonexistent run flags; Hovmöller audit removed the obsolete Z500
+significance-contour description. Final rendering logs report TP only.
+
+Nine targeted tests execute the actual production validators with synthetic
+NumPy dataset fixtures: old/new/invalid/missing metadata, incorrect dates,
+longitude/latitude coordinates, differences, grouping and TP units. All pass,
+as do the two existing static/Matplotlib geometry checks, py_compile for the
+five changed Python files, and git diff --check. These tests do not open real
+NetCDF or execute full maps. The server-reported June 8 daily files are accepted
+as existing; they are not mounted here, so no real redraw was executed in this
+environment. Hovmöller availability is independent and must be checked on the
+server as documented, without rerunning already generated daily products.

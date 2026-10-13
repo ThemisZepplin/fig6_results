@@ -1435,7 +1435,6 @@ def export_fig7_spatial_significance(
 - Significance loader: TP/Z500 only; U850/V850 are not read.
 - Composite consistency tolerance: `rtol=1e-7`, `atol=1e-6`; each family reports `max_absolute_mismatch` in the QC table.
 - FDR-domain mask output: `fdr_domain_mask`; correction-domain grid count is reported for every family.
-- Default run flags: `RUN_ORIGINAL_FIG7=False`, `RUN_EXPORT_FIG7_CACHE=False`, `RUN_EXPORT_FIG7_SIGNIFICANCE=True`.
 - TP and Z500 masks were calculated independently: `True`.
 - Output TP: `{tp_path}`
 - Output Z500: `{z500_path}`

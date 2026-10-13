@@ -1,6 +1,7 @@
 """Plot paper Fig.8 from a plot-ready NetCDF cache only."""
 
 import os
+from datetime import datetime
 from typing import Sequence, Tuple
 
 import numpy as np
@@ -34,8 +35,29 @@ plt.rcParams["ps.fonttype"] = 42
 
 
 
+def _initialization_from_attrs(attrs):
+    """Resolve a valid date by precedence, never by filename or plotted dates."""
+    invalid = []
+    for key in ("initialization", "init_date", "main_init_date"):
+        value = attrs.get(key)
+        if value is None:
+            continue
+        if isinstance(value, bytes):
+            value = value.decode("utf-8", errors="replace")
+        text = str(value).strip()
+        if not text:
+            continue
+        try:
+            return datetime.fromisoformat(text.replace("Z", "+00:00")).date().isoformat()
+        except ValueError:
+            invalid.append(key)
+    if invalid:
+        raise ValueError(f"No valid initialization metadata in {invalid}")
+    return None
+
+
 def _validate_identity(ds, init_date, start, end, time_coord):
-    declared = ds.attrs.get("initialization", ds.attrs.get("main_init_date"))
+    declared = _initialization_from_attrs(ds.attrs)
     if declared != init_date:
         raise ValueError(f"Cache initialization {declared!r} differs from {init_date}")
     if ds.attrs.get("grouping_stage") != "Total":
@@ -64,8 +86,10 @@ def _validate_identity(ds, init_date, start, end, time_coord):
             raise ValueError("Hot and Cold members overlap")
 
 def _validate_pair(cache, sig, init_date):
-    # Historical June 12 spatial exports lack initialization metadata.
-    declared = sig.attrs.get("initialization", "2023-06-12")
+    declared = _initialization_from_attrs(sig.attrs)
+    # Preserve historical June 12-only compatibility, never infer June 8.
+    if declared is None and init_date == "2023-06-12":
+        declared = "2023-06-12"
     if declared != init_date or sig.attrs.get("grouping_stage") != "Total":
         raise ValueError("TP significance initialization/grouping mismatch")
     if sig.attrs.get("units") != "mm day^-1":
@@ -333,6 +357,8 @@ def plot_fig7_hovmoller_from_cache(
         _fig8_validate_significance(ds, sig, None, coord)
         datasets.append(ds)
         masks.append(sig.significant_local_p005.load())
+        tp_count = int(masks[-1].astype(bool).sum().item())
+        print(f"[Fig.7 TP local significance] init={init}: TP={tp_count}; two-sided Welch p < 0.05")
         sig.close()
     left, right = datasets
     for key in ("tp_obs_hov", "z500_obs_hov"):
