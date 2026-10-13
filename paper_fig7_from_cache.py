@@ -24,6 +24,12 @@ FIG7_ABS_TICKS = [0, 5, 10, 15, 20]
 FIG7_DIFF_TICKS = [-15, -10, -5, 0, 5, 10, 15]
 FIG_WIDTH_IN = 6.5
 FIG7_HEIGHT_IN = 7.1
+FIG7_SUBPLOT_LAYOUT = dict(
+    left=0.105, right=0.99, top=0.965, bottom=0.145,
+    wspace=0.035, hspace=0.075,
+)
+FIG7_CAX_ABS = [0.17, 0.085, 0.28, 0.011]
+FIG7_CAX_DIFF = [0.60, 0.085, 0.30, 0.011]
 FONT_PANEL_LETTER = 10.5
 FONT_COLUMN_HEADER = 10.0
 FONT_ROW_HEADER = 9.5
@@ -275,6 +281,57 @@ def _fig7_overlay_tp_significance(ax, mask: xr.DataArray) -> None:
         )
 
 
+def _fig7_apply_daily_layout(fig, axs, rows):
+    """Shared Fig.6/S6 layout, measured after fixed-aspect axes settle."""
+    fig.subplots_adjust(**FIG7_SUBPLOT_LAYOUT)
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    # Keep a 3-point gap from latitude labels and from the canvas edge.
+    gap = 3.0 * fig.dpi / 72.0
+    labels = []
+    for r, (row_title, _, _) in enumerate(rows):
+        pos = axs[r, 0].get_position()
+        label = fig.text(
+            0, 0.5 * (pos.y0 + pos.y1), row_title.replace("Total ", ""),
+            rotation=90, ha="center", va="center",
+            fontsize=FONT_ROW_HEADER, fontweight="bold",
+        )
+        labels.append(label)
+
+    def required_left_padding():
+        return max(
+            0.0,
+            max(label.get_window_extent(renderer).width + 2 * gap
+                - axs[r, 0].get_tightbbox(renderer).x0
+                for r, label in enumerate(labels)),
+        )
+
+    extra = required_left_padding() / fig.bbox.width
+    if extra:
+        # Only accommodate actual tick/font collisions, without stretching maps.
+        if extra > 0.015:
+            raise ValueError("Daily row labels need more than a small margin adjustment")
+        fig.subplots_adjust(left=FIG7_SUBPLOT_LAYOUT["left"] + extra)
+        fig.canvas.draw()
+        renderer = fig.canvas.get_renderer()
+
+    for r, label in enumerate(labels):
+        ax = axs[r, 0]
+        pos = ax.get_position()
+        width = label.get_window_extent(renderer).width
+        x = ax.get_tightbbox(renderer).x0 - gap - width / 2
+        label.set_position((fig.transFigure.inverted().transform((x, 0))[0],
+                            0.5 * (pos.y0 + pos.y1)))
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    for r, label in enumerate(labels):
+        bounds = label.get_window_extent(renderer)
+        if (bounds.x0 < gap - 0.5 or bounds.y0 < 0 or bounds.y1 > fig.bbox.height
+                or bounds.x1 > axs[r, 0].get_tightbbox(renderer).x0 - gap + 0.5):
+            raise ValueError("Daily row label clips the canvas or overlaps latitude labels")
+    return labels
+
+
 def plot_fig6_from_cache(
     cache_path: str = FIG7_DEFAULT_CACHE,
     out_dir: str = FIG7_DEFAULT_OUT_DIR,
@@ -325,21 +382,14 @@ def plot_fig6_from_cache(
             _fig7_format_geo_axes(ax, show_left=(c == 0), show_bottom=(r == 3))
             if r == 0:
                 ax.set_title(str(np.datetime_as_string(date, unit="D")), fontsize=FONT_COLUMN_HEADER, pad=3)
-    fig.subplots_adjust(left=0.135, right=0.99, top=0.965, bottom=0.145, wspace=0.035, hspace=0.075)
-    for r, (row_title, _, _) in enumerate(rows):
-        pos = axs[r, 0].get_position()
-        fig.text(
-            0.02, 0.5 * (pos.y0 + pos.y1), row_title.replace("Total ", ""),
-            rotation=90, ha="center", va="center",
-            fontsize=FONT_ROW_HEADER, fontweight="bold",
-        )
-    cax_abs = fig.add_axes([0.17, 0.055, 0.28, 0.011])
+    _fig7_apply_daily_layout(fig, axs, rows)
+    cax_abs = fig.add_axes(FIG7_CAX_ABS)
     cbar_abs = fig.colorbar(cf_abs, cax=cax_abs, orientation="horizontal")
     cbar_abs.set_ticks(FIG7_ABS_TICKS)
     cbar_abs.ax.xaxis.set_major_formatter(mticker.FormatStrFormatter("%g"))
     cbar_abs.ax.tick_params(labelsize=FONT_COLORBAR_TICK, pad=1)
     cbar_abs.set_label("Precipitation (mm day$^{-1}$)", fontsize=FONT_COLORBAR_LABEL, labelpad=2)
-    cax_diff = fig.add_axes([0.60, 0.055, 0.30, 0.011])
+    cax_diff = fig.add_axes(FIG7_CAX_DIFF)
     cbar_diff = fig.colorbar(cf_diff, cax=cax_diff, orientation="horizontal")
     cbar_diff.set_ticks(FIG7_DIFF_TICKS)
     cbar_diff.ax.xaxis.set_major_formatter(mticker.FormatStrFormatter("%g"))

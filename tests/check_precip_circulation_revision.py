@@ -52,6 +52,60 @@ class RevisionChecks(unittest.TestCase):
         self.assertAlmostEqual(obs.get_position().x0 + obs.get_position().width / 2, (0.145 + 0.985) / 2)
         plt.close(fig)
 
+    def test_daily_fixed_aspect_layout_and_row_label_clearance(self):
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        tree = ast.parse((ROOT / "paper_fig7_from_cache.py").read_text())
+        names = {"FIG7_SUBPLOT_LAYOUT", "FIG7_CAX_ABS", "FIG7_CAX_DIFF", "FONT_ROW_HEADER"}
+        selected = [n for n in tree.body if (
+            isinstance(n, ast.Assign) and any(isinstance(t, ast.Name) and t.id in names for t in n.targets)
+        ) or (isinstance(n, ast.FunctionDef) and n.name == "_fig7_apply_daily_layout")]
+        ns = {}
+        exec(compile(ast.Module(body=selected, type_ignores=[]), "daily-layout", "exec"), ns)
+        fig, axs = plt.subplots(4, 3, figsize=(6.5, 7.1))
+        for ax in axs.flat:
+            ax.set_xlim(90, 135)
+            ax.set_ylim(25, 55)
+            ax.set_aspect("equal", adjustable="box")
+            ax.set_yticks([25, 35, 45, 55], ["25°N", "35°N", "45°N", "55°N"])
+        rows = [(name, None, None) for name in ("Observed", "Hot17", "Cold17", "Hot17 − Cold17")]
+        labels = ns["_fig7_apply_daily_layout"](fig, axs, rows)
+        renderer = fig.canvas.get_renderer()
+        self.assertEqual(len(labels), 4)
+        self.assertEqual(len(fig.axes), 12)
+        self.assertAlmostEqual(fig.get_figwidth(), 6.5)
+        self.assertAlmostEqual(fig.get_figheight(), 7.1)
+        self.assertGreaterEqual(fig.subplotpars.left, 0.105)
+        self.assertLessEqual(fig.subplotpars.left, 0.120)
+        for r, label in enumerate(labels):
+            frame = axs[r, 0].get_position()
+            text = label.get_window_extent(renderer)
+            ticks = axs[r, 0].get_tightbbox(renderer)
+            self.assertAlmostEqual(label.get_position()[1], (frame.y0 + frame.y1) / 2)
+            self.assertGreaterEqual(text.x0, 0)
+            self.assertLess(text.x1, ticks.x0)
+            self.assertGreaterEqual(text.y0, 0)
+            self.assertLessEqual(text.y1, fig.bbox.height)
+            self.assertAlmostEqual(frame.width * 6.5 / (frame.height * 7.1), 45 / 30)
+        for name, expected in (("FIG7_CAX_ABS", [0.17, 0.085, 0.28, 0.011]),
+                               ("FIG7_CAX_DIFF", [0.60, 0.085, 0.30, 0.011])):
+            self.assertEqual(ns[name], expected)
+            cax = fig.add_axes(ns[name])
+            self.assertAlmostEqual(cax.get_position().y0, 0.085)
+            self.assertAlmostEqual(cax.get_position().height, 0.011)
+        plt.close(fig)
+
+    def test_both_daily_entries_share_layout(self):
+        tree = ast.parse((ROOT / "paper_fig7_from_cache.py").read_text())
+        functions = {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)}
+        calls = [n.func.id for n in ast.walk(functions["plot_fig6_from_cache"])
+                 if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)]
+        self.assertIn("_fig7_apply_daily_layout", calls)
+        calls = [n.func.id for n in ast.walk(functions["plot_figS6_from_cache"])
+                 if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)]
+        self.assertEqual(calls, ["plot_fig6_from_cache"])
+
 
 if __name__ == "__main__":
     unittest.main()

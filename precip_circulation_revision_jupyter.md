@@ -24,23 +24,95 @@ exist under `/data1/huangy/fig6/NC/v12/paper_figures/` (not `paper_figures.0`).
 This is sufficient to proceed with the daily redraw; do not rerun science
 exports or edit NetCDF values to repair metadata compatibility.
 
+Each function generates **one initialization only**: `plot_fig6_from_cache()`
+produces June 12 Fig.6, and `plot_figS6_from_cache()` produces June 8 Fig.S6.
+Calling either function never generates the other figure. Both use the same
+6.5 × 7.1-inch, four-row/three-column layout with panels a–l.
+
+### Check the four daily inputs before either method
+
+This check lists exact missing paths without exporting caches, changing files,
+or substituting another initialization. Readiness is independent for each figure.
+
 ```python
-figures = runpy.run_path(str(repo / 'paper_precip_circulation_revision_from_cache.py'))
-figures['plot_figS6_from_cache']()
-# If the existing June 12 files are also available:
-# figures['plot_fig6_from_cache']()
+from pathlib import Path
+root = Path('/data1/huangy/fig6/NC/v12/paper_figures')
+daily_inputs = {
+    'Fig.6': [
+        root / 'cache/fig7_daily_synoptic_plot_cache.nc',
+        root / 'significance/fig7_spatial_significance_tp.nc',
+    ],
+    'Fig.S6': [
+        root / 'cache/fig7_daily_synoptic_init2023-06-08_plot_cache.nc',
+        root / 'significance/fig7_init2023-06-08_spatial_significance_tp.nc',
+    ],
+}
+ready = {}
+for figure, paths in daily_inputs.items():
+    missing = [str(path) for path in paths if not path.is_file()]
+    ready[figure] = not missing
+    if missing:
+        print(figure + ' missing inputs:')
+        for path in missing:
+            print('  ' + path)
+    else:
+        print(figure + ': both input files exist')
 ```
 
-Fig.S6 uses these existing inputs, with all 12 panels (a–l):
+File existence alone is not validation; rendering still performs the existing
+initialization, date, coordinate, unit, grouping and difference-field checks.
+The correct root is `paper_figures/`, never the historical `paper_figures.1/`.
 
-- `cache/fig7_daily_synoptic_init2023-06-08_plot_cache.nc`
-- `significance/fig7_init2023-06-08_spatial_significance_tp.nc`
+### Method 1: paste the full updated daily plotting script into the notebook
 
-It writes `final_from_cache/jgr_6p5in/figS6_daily_synoptic_init2023-06-08.png`
-and `.pdf`. Z500 significance is not loaded or rendered. Ordinary labeled
-Z500 difference contours and TP local two-sided Welch p < 0.05 markers remain.
-Reload this plotting cell for future layout changes; no scientific export is
-needed when its input files already exist and pass validation.
+Paste the entire latest `paper_fig7_from_cache.py` into a notebook cell and run
+it to define the functions. Then run both explicit calls below. This does not
+install a Python module or require importing the script by module name.
+
+```python
+if ready['Fig.6']:
+    fig6_paths = plot_fig6_from_cache()
+    print("Fig.6:", fig6_paths)
+
+if ready['Fig.S6']:
+    figS6_paths = plot_figS6_from_cache()
+    print("Fig.S6:", figS6_paths)
+```
+
+The two blocks are independent and may also be run in separate cells.
+Missing inputs are reported by the preceding check; no automatic regeneration
+or replacement takes place.
+
+### Method 2: load the updated scripts on disk through the unified runpy entry
+
+Ensure the **disk copy** of `paper_fig7_from_cache.py` and the unified entry
+`paper_precip_circulation_revision_from_cache.py` are updated to this revision.
+Pasting definitions into a notebook does not update either disk file. Use the
+absolute checkout path, not the notebook working directory, and call both entries:
+
+```python
+import runpy
+repo = Path('/absolute/path/to/fig6_results').resolve()
+figures = runpy.run_path(str(repo / 'paper_precip_circulation_revision_from_cache.py'))
+if ready['Fig.6']:
+    fig6_paths = figures['plot_fig6_from_cache']()
+    print("Fig.6:", fig6_paths)
+
+if ready['Fig.S6']:
+    figS6_paths = figures['plot_figS6_from_cache']()
+    print("Fig.S6:", figS6_paths)
+```
+
+Both methods write PNG/PDF under
+`/data1/huangy/fig6/NC/v12/paper_figures/final_from_cache/jgr_6p5in/`:
+
+- `fig6_daily_synoptic_init2023-06-12.png` / `.pdf`
+- `figS6_daily_synoptic_init2023-06-08.png` / `.pdf`
+
+Z500 significance is not loaded or rendered. Ordinary labeled Z500 difference
+contours and TP local two-sided Welch p < 0.05 markers remain. For subsequent
+layout changes, reload only the updated plotting definitions/entry and repeat
+both explicit calls. Existing scientific products are reused without re-export.
 
 June 8 Hovmöller files must be checked separately on the server. A successful
 daily Fig.S6 redraw does not establish that Hovmöller exports were generated.

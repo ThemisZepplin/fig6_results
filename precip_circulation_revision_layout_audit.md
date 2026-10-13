@@ -67,3 +67,37 @@ NetCDF or execute full maps. The server-reported June 8 daily files are accepted
 as existing; they are not mounted here, so no real redraw was executed in this
 environment. Hovmöller availability is independent and must be checked on the
 server as documented, without rerunning already generated daily products.
+
+## Shared Fig.6/Fig.S6 compact-layout follow-up
+
+The shared renderer restores the requested baseline: 6.5 × 7.1 inches;
+subplots left=0.105, right=0.99, top=0.965, bottom=0.145,
+wspace=0.035, hspace=0.075. Both colorbars move from y=0.055 to y=0.085,
+with unchanged x positions, widths (0.28/0.30), thickness (0.011), ticks,
+units, colors and fonts. Maps retain their existing fixed geographic aspect.
+
+After canvas draw, row labels use actual first-column axis centers and tight
+bounds including latitude labels. A 3-point gap separates row names from the
+latitude labels and canvas edge. If actual font/tick bounds require it, only
+the shared left margin may increase by at most 0.015; larger adjustments fail
+explicitly. The baseline suffices in the synthetic geometry check. Both
+initializations call the same layout helper; no separate layout parameters.
+No suptitle is added, and dates, observations, group rows and a–l remain.
+
+The Jupyter instructions provide full-script paste and absolute-path runpy
+methods, four exact input-path checks, and explicit separate Fig.6/Fig.S6
+calls. Each call generates just its corresponding initialization.
+
+Validation: both changed Python files pass py_compile; nine identity tests and
+four layout/static checks pass; git diff --check passes. The added daily check
+executes the actual layout helper on fixed-aspect Matplotlib axes with latitude
+labels and checks centering, clipping, collision clearance, map ratio and
+colorbar geometry. It is not a Cartopy/NetCDF integration run or a real figure.
+No science code, cache, grouping CSV or NetCDF values are changed.
+
+The named attachment and comparison PNGs were not exposed as readable files in
+this session; layout was based on the explicit old parameters in the request.
+Server-confirmed daily products remain valid existing inputs, but their real
+cache files are not mounted here. Neither real Fig.6 nor real Fig.S6 PNG/PDF
+was redrawn or visually verified in this environment. Server checks of actual
+latitude-label clearance, row/colorbar spacing and final PNG/PDF remain pending.
