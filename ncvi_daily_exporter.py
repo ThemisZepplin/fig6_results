@@ -127,8 +127,8 @@ def load_pair(spec, init, hindcast=False):
                     if a.sizes['number']!=1:raise ValueError('CF must have one member')
                     a=a.assign_coords(number=[0])
                 else:a=a.expand_dims(number=[0])
-            elif 'number' not in a.dims or not np.array_equal(a.number.values,np.arange(1,51)):
-                raise ValueError('PF IDs must be 1..50 in order; no renumbering')
+            elif 'number' not in a.dims or not np.array_equal(a.number.values,np.arange(1,11 if hindcast else 51)):
+                raise ValueError('PF IDs must be 1..10 for reforecast or 1..50 for realtime; no renumbering')
             lat=a.latitude;lon=a.longitude
             a=a.sel(latitude=lat[(lat>=35)&(lat<=50)],longitude=lon[(lon>=115)&(lon<=130)])
             if a.sizes['latitude']==0 or a.sizes['longitude']==0 or not np.isfinite(a.values).all():
@@ -143,10 +143,15 @@ def load_pair(spec, init, hindcast=False):
                               attributes=json.dumps(attrs,default=str),spatial_mean='arithmetic grid-cell mean',
                               legacy_spatial_mean='cos(latitude) weighted',region='35-50N 115-130E'))
     merged=xr.concat(parts,dim='number',join='exact',compat='equals').sortby('number')
-    if not np.array_equal(merged.number.values,np.arange(51)):
-        raise ValueError('CF0 + PF1..50 required')
+    if not np.array_equal(merged.number.values,np.arange(11 if hindcast else 51)):
+        raise ValueError('Require CF0+PF1..10 reforecast or CF0+PF1..50 realtime')
     if hindcast:
-        extra=[d for d in merged.dims if d!='step']
+        if set(merged.dims)!={'time','step','number'} or merged.sizes['time']!=20:
+            raise ValueError('Reforecast requires retained time x step x 11 members, 20 years')
+        refs=pd.DatetimeIndex(merged.time.values)
+        if refs.has_duplicates or sorted(refs.year.tolist())!=list(range(2003,2023)):
+            raise ValueError('Reforecast years must be 2003..2022 exactly once')
+        extra=['time','number']
         merged=merged.stack(sample=extra).transpose('step','sample')
     else:
         if set(merged.dims)!={'step','number'}:raise ValueError('Unexpected realtime dimensions')

@@ -22,3 +22,9 @@ Daily PV, daily reforecast climatology and literal anomaly remain separate. Regi
 ERA5 curve acceptance requires real coverage and verified inline provenance; unknown evidence leaves era5_reference_qc FAIL and formal_process_allowed false. S2S numerical audit proceeds independently. A failed stage replay also blocks formal acceptance. Existing files are read-only; rerunning Cell6 cannot overwrite a previous export. Choose a new run directory and restart Cells1–6 for another run.
 
 HPC execution is not possible from this cloud environment. All cells are unexecuted; synthetic tests and schema checks are code-preservation evidence only. Please return Cell2/3 selections and Cell5/6 QC logs, the replay CSV and full manifest after HPC execution. No GRIB upload is needed.
+
+## Confirmed HPC reforecast structure correction
+
+Realtime remains CF0+PF1–50 (51). Reforecast is CF0+PF1–10 for each of the 20 reference years 2003–2022. The embedded Cell3 loader now validates these independently, retains reforecast time and number axes, and explicitly stacks time then number into 220 samples, yielding (step, sample). Wrong member IDs, missing/duplicated years or unexpected dimensions fail. No years or members are dropped or renumbered. The same fix is synchronized to ncvi_daily_exporter.py so the module and self-contained Notebook remain scientifically identical.
+
+All other 51-member assertions concern realtime/model references/output members, not the reforecast sample set. Daily climatology uses all 220 samples; scalar replay still averages every selected step and sample. Synthetic structure tests mock file opening only, using 20-year ×11-member arrays and verifying sample order and unit conversion. They are not HPC GRIB execution results.
