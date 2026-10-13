@@ -69,3 +69,33 @@ def group_daily(long):
     if not (counts == 17).all():
         raise ValueError('Each physical group requires exactly 17 members')
     return long.groupby(keys, as_index=False).value.mean()
+
+
+def verified_ncvi_groups(export_root, groups):
+    """Formal bridge accepts only immutable PASS exporter outputs, no stage fill."""
+    from pathlib import Path
+    import json
+    from ncvi_daily_exporter import digest
+    root=Path(export_root)
+    manifest=json.loads((root/'ncvi_daily_export_manifest.json').read_text())
+    if manifest['status']!='PASS' or manifest['formal_process_allowed'] is not True:
+        raise ValueError('NCVI source/stage QC must PASS before process integration')
+    for name,expected in manifest['outputs'].items():
+        if Path(name).name!=name or (root/name).is_symlink() or digest(root/name)!=expected:
+            raise ValueError('NCVI exporter artifact hash mismatch')
+    d=pd.read_csv(root/'table_ncvi_concurrent_daily_members.csv')
+    if len(d)!=1122 or d.duplicated(KEY).any() or not d.qc_status.eq('PASS').all() or not d.units.eq('PVU').all() or not d.anomaly_used.eq(True).all():
+        raise ValueError('NCVI member coverage/definition invalid')
+    d['date']=pd.to_datetime(d.date)
+    expected=pd.MultiIndex.from_product([INITS,pd.date_range('2023-06-14','2023-06-24'),range(51)],names=KEY)
+    if not pd.MultiIndex.from_frame(d[KEY]).sort_values().equals(expected.sort_values()):
+        raise ValueError('NCVI member/day keys invalid')
+    finite(d.daily_ncvi_anomaly_pvu,'daily NCVI anomaly')
+    pieces=[]
+    for window in ['Stage-I','Total']:
+        g=groups[groups.window==window]
+        q=d.merge(g[['init_date','member','group']],on=['init_date','member'],validate='many_to_one')
+        if len(q)!=1122 or q.group.isna().any():raise ValueError('NCVI group mapping incomplete')
+        q['window']=window;q['factor']='NCVI_concurrent';q['value']=q.daily_ncvi_anomaly_pvu
+        pieces.append(q[KEY+['window','group','factor','value']])
+    return group_daily(pd.concat(pieces,ignore_index=True))
