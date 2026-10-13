@@ -35,6 +35,7 @@ def test_synthetic_panel_counts_alignment_text_and_boundary():
         with plt.rc_context(env['STYLE']):
             fig,axes=env['timeseries_figure'](pd.DataFrame(records),factors,window,'raw')
             assert len(axes)==count and fig.get_figwidth()==6.5
+            assert fig.get_figheight()*25.4<=228
             assert env['figure_qc'](fig,axes)['text_extent_qc']=='PASS'
             if window=='Stage-I':assert all(len(a.patches)==1 for a in axes)
             plt.close(fig)
@@ -69,3 +70,18 @@ def test_statistics_use_individual_51_members_and_no_group_mean():
     assert np.isclose(q['trend_slope'],np.polyfit(x,y,1)[0])
     import pytest
     with pytest.raises(ValueError,match='51 original'):env['scatter_statistics'](d.iloc[:17],'raw','2023-06-08','sm_avg')
+
+
+def test_pdf_qc_rejects_size_and_small_body_and_classifies_scripts():
+    from types import SimpleNamespace
+    fn=next(n for n in ast.parse(''.join(nb()['cells'][4]['source'])).body if isinstance(n,ast.FunctionDef) and n.name=='pdf_page_qc')
+    env={};exec(compile(ast.Module(body=[fn],type_ignores=[]),'pdf','exec'),env)
+    class Page:
+        def __init__(self,height=8.9,body=8,script=5.6):
+            self.rect=SimpleNamespace(width=6.5*72,height=height*72)
+            self.spans=[dict(text='Tmax',size=body,flags=0,bbox=(10,10,30,20)),dict(text='2',size=script,flags=1,bbox=(31,10,35,15))]
+        def get_text(self,mode):return {'blocks':[{'lines':[{'spans':self.spans}]}]}
+    assert env['pdf_page_qc'](Page(),8.9)['status']=='PASS'
+    assert env['pdf_page_qc'](Page(body=7),8.9)['status']=='FAIL'
+    assert env['pdf_page_qc'](Page(script=4),8.9)['status']=='FAIL'
+    assert env['pdf_page_qc'](Page(height=10.5),10.5)['status']=='FAIL'
