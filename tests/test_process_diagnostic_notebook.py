@@ -111,3 +111,47 @@ def test_cell4_member_diagnostic_branch_executes_dict_y(tmp_path):
     env['parameters']=mismatched_parameters
     with pytest.raises(ValueError,match='target/model mismatch'):
         exec(compile(branch,'actual-cell4-member-branch','exec'),env)
+
+
+def test_daily_markers_land_exactly_on_labelled_ticks_and_scatter_stats_use_right_side():
+    """Exercise true plotting functions, not only their static strings."""
+    env=dict(np=np,pd=pd,plt=plt,mdates=mdates,Line2D=Line2D,MaxNLocator=MaxNLocator,
+             INITS=('2023-06-08','2023-06-12'),GROUPS=('Hot17','Middle17','Cold17'))
+    ast_nodes=[node for node in ast.parse(''.join(nb()['cells'][4]['source'])).body
+               if isinstance(node,(ast.FunctionDef,ast.Assign)) and
+               (isinstance(node,ast.FunctionDef) or
+                any(isinstance(t,ast.Name) and t.id in
+                    ('COLORS','LABELS','STYLE','MARKERS','LINESTYLES') for t in node.targets))]
+    exec(compile(ast.Module(body=ast_nodes,type_ignores=[]),'layout','exec'),env)
+    for window,factors,end,expect_ticks in [
+        ('Total',('NCHN_tp','z500_anom_NCHN','sm_avg','NCVI_concurrent','TCC_Avg'),'2023-06-24',11),
+        ('Stage-I',('partial_fitted_Tmax','sm_avg','z500_anom_NCHN','SHF_Avg','NCVI_concurrent','TCC_Avg'),'2023-06-18',5)]:
+        records=[dict(init_date=init,date=date,group=group,factor=factor,value=1+i*.02,
+                      model_version='raw')
+                 for init in env['INITS'] for factor in factors for group in env['GROUPS']
+                 for i,date in enumerate(pd.date_range('2023-06-14',end))]
+        with plt.rc_context(env['STYLE']):
+            fig,axes=env['timeseries_figure'](pd.DataFrame(records),factors,window,'raw')
+            result=env['figure_qc'](fig,axes)
+            assert result['daily_marker_tick_alignment'] is True
+            for ax in axes:
+                assert len(ax.get_xticks())==expect_ticks
+                assert len(ax.lines[0].get_xdata(orig=True))==expect_ticks
+            if window=='Total':
+                assert result['fig5_all_11_days_labelled'] is True
+                assert [x.get_text() for x in axes[-1].get_xticklabels()]==[
+                    d.strftime('%m-%d') for d in pd.date_range('2023-06-14','2023-06-24')]
+            plt.close(fig)
+    df=pd.DataFrame([
+        dict(init_date=init,model_version=version,member=m,
+             group=env['GROUPS'][m//17],sm_avg=.12+.001*m,
+             y_tmax=32+.05*m,partial_fitted_Tmax=31+.07*m)
+        for init in env['INITS'] for version in ['raw','residualized'] for m in range(51)])
+    with plt.rc_context(env['STYLE']):
+        fig,axes=env['scatter_figure'](df,'raw')
+        for ax in axes:
+            text_boxes=[obj for obj in ax.texts if 'n = 51' in obj.get_text()]
+            assert len(text_boxes)==1
+            assert text_boxes[0].get_position()[0] >= .95
+            assert text_boxes[0].get_ha()=='right'
+        plt.close(fig)
