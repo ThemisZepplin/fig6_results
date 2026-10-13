@@ -38,3 +38,20 @@ def test_synthetic_panel_counts_alignment_text_and_boundary():
             assert env['figure_qc'](fig,axes)['text_extent_qc']=='PASS'
             if window=='Stage-I':assert all(len(a.patches)==1 for a in axes)
             plt.close(fig)
+
+
+def test_scatter_layout_and_explicit_plot_tables():
+    whole=''.join(''.join(c['source']) for c in nb()['cells'])
+    for name in ['fig5_total_timeseries_plot.csv','fig11_stageI_timeseries_','figS11_stageI_scatter_','group_membership_audit.csv','consistency_manifest.json']:
+        assert name in whole
+    assert 'fig.suptitle' not in whole
+    env=dict(np=np,pd=pd,plt=plt,mdates=mdates,Line2D=Line2D,MaxNLocator=MaxNLocator,INITS=('2023-06-08','2023-06-12'),GROUPS=('Hot17','Middle17','Cold17'))
+    nodes=[n for n in ast.parse(''.join(nb()['cells'][4]['source'])).body if isinstance(n,(ast.FunctionDef,ast.Assign)) and (isinstance(n,ast.FunctionDef) or any(isinstance(t,ast.Name) and t.id in ['COLORS','LABELS','STYLE'] for t in n.targets))]
+    exec(compile(ast.Module(body=nodes,type_ignores=[]),'scatter','exec'),env)
+    records=[dict(init_date=init,member=m,group=env['GROUPS'][m//17],model_version=v,sm_avg=.15+m*.001,y_tmax=30+m*.08,partial_fitted_Tmax=31+m*.04+(.1 if v=='raw' else 0)) for init in env['INITS'] for v in ['raw','residualized'] for m in range(51)]
+    with plt.rc_context(env['STYLE']):
+        fig,axes=env['scatter_figure'](pd.DataFrame(records),'raw')
+        assert len(axes)==4 and axes[0].get_xlabel().startswith('SM (')
+        assert axes[2].get_xlabel().startswith('SM–SHF')
+        assert env['figure_qc'](fig,axes)['text_extent_qc']=='PASS'
+        plt.close(fig)

@@ -21,3 +21,23 @@ Products in new output directory:
 Methods distinctions are preserved: v12 Tmax arithmetic spatial average, TCC source date convention represents08:00–08:00 BJT, Stage-I day18 is out-of-training projection. Partial-fit differences reflect parameterization sensitivity. Nothing redefines members or changes MLR results. FigS11 existing inputs/outputs are not touched.
 
 Current HPC evidence is user-reported: source PASS,1122 daily NCVI rows,204 stage comparisons, internal agreement about1e-16, archived-model difference4.748331733361866e-08 and strict1e-8 FAIL, ERA5 provenance incomplete. Cloud lacks run_001 so real curves/PDFs are not generated here. Cloud tests use synthetic series to check the six-cell independence, axes counts/width/alignment, renderer text extents and stage boundary; they are not scientific validation. Return Cell2–6 logs, new plotting CSVs, manifest and PNG/PDF after running on HPC.
+
+## Updated Fig.5 / Fig.11 / Fig.S11 organization
+
+The same complete six-cell Notebook now generates all five figures. FigS11 raw and residualized are each2×2, columns06-08/06-12 and rows Tmax–raw SM / Tmax–version-specific partial fit. Both member diagnostics are independently recomputed with each saved full model; Tmax and raw SM are asserted identical across versions. Physical Fig11 series are also asserted identical. No MLR fitting occurs.
+
+Cell4 writes FIVE dedicated plot CSVs into a fresh output directory:
+
+- fig5_total_timeseries_plot.csv
+- fig11_stageI_timeseries_raw_plot.csv
+- fig11_stageI_timeseries_residualized_plot.csv
+- figS11_stageI_scatter_raw.csv
+- figS11_stageI_scatter_residualized.csv
+
+Cell5 verifies hashes and reads those files back before rendering. Plotting does not depend on old Notebook objects. Cell6 adds group_membership_audit.csv, layout_qc.csv, partial_fitted_audit.csv and consistency_manifest.json, including original NCVI manifest/FAIL and explicit formal_process_allowed=false. Existing output directories/files cannot be overwritten. If Cell4 succeeds but a later cell fails, fix/retry the later cell without rerunning Cell4 or choose a new directory and restart the entire workflow.
+
+Figure faces no longer contain PRELIMINARY/DIAGNOSTIC watermark text. Diagnostic status stays in figure filenames (_DIAGNOSTIC), this caption note and the manifest. ERA5 NCVI remains omitted pending provenance. PNG/PDF sizes, colors, row/common ranges, renderer QC and day18 shading remain unchanged. Two additional filenames: FigS11_StageI_raw_DIAGNOSTIC and FigS11_StageI_residualized_DIAGNOSTIC.
+
+Caption draft: Curves show the current v12 stage-ranked groups; physical series are unchanged across raw/residualized models. The SM–SHF partial fitted Tmax diagnostic uses each full model's intercept, standardized coefficients and training scalers, holding all other predictors at training means. Daily residualized heat flux is projected with frozen Stage-I residualization parameters. June18 is outside the14–17 training window. Scatter first-row Tmax/raw SM is identical across versions. Diagnostic outputs retain unresolved historical NCVI strict replay and ERA5 provenance status; they are not formal paper acceptance.
+
+This updated subsection supersedes the older product names and figure-watermark description above.
