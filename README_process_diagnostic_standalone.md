@@ -59,3 +59,38 @@ Only Cell5–6 change in this repair. Figure physical dimensions: Fig5 165.1×21
 Actual PDF QC verifies maximum width/height AND exact intended canvas, editable text and clipping. Readability criteria require ordinary spans>=8pt and PDF-flagged superscript/subscript spans>=5.5pt, recorded separately. These explicit workflow criteria are not represented as an AGU-mandated minimum. Unflagged Unicode superscripts embedded in ordinary labels remain ordinary spans. Undersized fonts/oversized pages produce FAIL with reasons, saved in pdf_font_qc.csv/manifest, then stop acceptance; PyMuPDF missing remains NOT_RUN. Renderer QA is not actual PDF QA. All export formats PDF/SVG/PNG600 remain, with no overwrite of existing SVG or other outputs.
 
 Manifest notebook_source_commit=205c4b8 identifies the actual source before this repair; historical_reference_baseline=90b4982 is separate. Neither is HPC HEAD; execution_git_head remains null. Exact repaired code is identified by executed_code_sha256 and executed_cells.json. Calculations, five plot-table definitions, original NCVI FAIL and ERA5 exclusion are unchanged.
+
+
+## ERA5 theta=320 K NCVI observational reference (diagnostic-only)
+
+The 2023-06-14–24 ERA5 NCVI line is restored in Fig.5 and Fig.11 from the **independent existing HPC CSV**:
+`/data1/huangy/fig6/NC/MSE/ERA5/NCVI_theta320/processed/era5_ncvi_theta320_daily_anomaly_2023.csv`.
+
+Cell1 configures `ERA5_NCVI_CSV` and optional exact `ERA5_NCVI_DATE_COL` /
+`ERA5_NCVI_VALUE_COL`. Their default `None` values permit ONLY strict, unambiguous
+selection from documented candidate *names*, never a heuristic selection by value or magnitude.
+Because the CSV header has not been viewed in this cloud session, run Cell1–3 in HPC and
+set the **actual CSV column names** if Cell3 reports ambiguous or missing columns;
+do not invent columns or reinterpret an absolute PV field as an anomaly. Inspect original
+source files to verify PVU, the baseline climatology and BJT day-label provenance.
+A CSV `units`/`unit` field, if present, is required to equal `PVU`; absent
+metadata is explicitly flagged as *configuration-only, independently unverified*.
+
+Cell3 validates 11 distinct BJT daily labels (14–24 Jun), finite anomaly values, source
+SHA256 and unique composite keys; duplicates/missing rows are fatal. The same observed
+11-day series is repeated only as the ERA5 comparison curve for both 06-08 and 06-12
+initializations; Stage-I shows 14–18 Jun, with 18 Jun outside the Stage-I training window.
+The raw/residualized model predictors and S2S member values are untouched, and Cell4
+continues to exclude ERA5 from all MLR-based partial-fit calculations. Cell5 requires
+the NCVI ERA5 curve (black) in both columns. The 5 existing plotting CSV *filenames*
+are retained, but their Fig.5/11 content now includes newly appended ERA5 NCVI rows;
+the Fig.S11 member-only tables are unchanged. Cell6 emits source/path/hash/schema
+metadata and `PLOTTED_PROVENANCE_PENDING`; historical strict S2S replay FAIL is
+preserved, not upgraded to PASS. ERA5 cosine-latitude weighted spatial mean and S2S
+arithmetic spatial mean must NOT be represented as identical. A plotted observational
+curve is not scientific provenance acceptance.
+
+**HPC rerun:** select a NEW `OUTPUT` directory, then run all six complete Cells in
+order. If the CSV date/value columns cannot be resolved automatically, enter exact
+real names in Cell1 and rerun from a fresh kernel/new output. Do not overwrite any
+older process plots or immutable NCVI run_001 data.
