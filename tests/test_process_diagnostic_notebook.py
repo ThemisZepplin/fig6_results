@@ -57,6 +57,15 @@ def test_scatter_layout_and_explicit_plot_tables():
         assert len(axes)==4 and axes[0].get_xlabel().startswith('SM (')
         assert axes[2].get_xlabel().startswith('SM–SHF')
         assert env['figure_qc'](fig,axes)['text_extent_qc']=='PASS'
+
+        # The prior y=.975 placed headings 1.13 PDF pt above page top.
+        # Keep both initialization headings inside the rendered PDF canvas.
+        headings=[t for t in fig.texts if 'June 2023' in t.get_text()]
+        assert len(headings)==2
+        assert all(abs(t.get_position()[1]-.960)<1e-10 for t in headings)
+        fig.canvas.draw()
+        renderer=fig.canvas.get_renderer()
+        assert all(t.get_window_extent(renderer).y1 <= fig.bbox.height for t in headings)
         plt.close(fig)
 
 
