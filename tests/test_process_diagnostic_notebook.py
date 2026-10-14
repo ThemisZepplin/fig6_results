@@ -172,6 +172,15 @@ def test_era5_ncvi_loader_rejects_ambiguous_missing_days_and_bad_units(tmp_path)
     dates=pd.date_range('2023-06-14','2023-06-24')
     correct=pd.DataFrame(dict(date_bjt=dates,ncvi_anomaly_pvu=np.arange(11)/10,units=['PVU']*11))
     path=tmp_path/'ncvi.csv';correct.to_csv(path,index=False)
+    # Real HPC schema: date, month_day, abs, clim, ncvi_theta320_anom_pvu, ...
+    actual=correct.rename(columns={'date_bjt':'date','ncvi_anomaly_pvu':'ncvi_theta320_anom_pvu'}).drop(columns=['units'])
+    actual['ncvi_theta320_abs_pvu']=1.0
+    actual['ncvi_theta320_clim_pvu']=1.0-actual['ncvi_theta320_anom_pvu']
+    actual.to_csv(path,index=False)
+    real_daily,real_audit=run(path)
+    assert real_audit['value_column']=='ncvi_theta320_anom_pvu'
+    assert len(real_daily)==11
+    correct.to_csv(path,index=False)
     daily,audit=run(path)
     assert len(daily)==11 and audit['status']=='PLOTTED_PROVENANCE_PENDING'
     assert audit['value_column']=='ncvi_anomaly_pvu'
