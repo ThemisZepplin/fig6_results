@@ -153,8 +153,12 @@ def test_daily_markers_land_exactly_on_labelled_ticks_and_scatter_stats_use_righ
         for ax in axes:
             text_boxes=[obj for obj in ax.texts if 'n = 51' in obj.get_text()]
             assert len(text_boxes)==1
-            assert text_boxes[0].get_position()[0] >= .95
-            assert text_boxes[0].get_ha()=='right'
+            if ax in axes[:2]:
+                assert text_boxes[0].get_position()[0] >= .95
+                assert text_boxes[0].get_ha()=='right'
+            else:
+                assert text_boxes[0].get_position()[0] <= .05
+                assert text_boxes[0].get_ha()=='left'
         plt.close(fig)
 
 
@@ -213,3 +217,40 @@ def test_era5_ncvi_is_in_all_physical_and_missing_curve_is_fatal():
     assert "if factor == 'NCVI_concurrent':" in fig
     assert 'Mandatory ERA5 NCVI reference missing' in fig
     assert "'era5_ncvi_source_qc':era5_ncvi_audit" in ''.join(nb()['cells'][5]['source'])
+
+
+def test_tcc_fixed_physical_ylim_and_no_extra_date_axis_title():
+    env=dict(np=np,pd=pd,plt=plt,mdates=mdates,Line2D=Line2D,MaxNLocator=MaxNLocator,
+             INITS=('2023-06-08','2023-06-12'),GROUPS=('Hot17','Middle17','Cold17'))
+    nodes=[x for x in ast.parse(''.join(nb()['cells'][4]['source'])).body
+           if isinstance(x,(ast.FunctionDef,ast.Assign)) and
+           (isinstance(x,ast.FunctionDef) or
+            any(isinstance(t,ast.Name) and t.id in
+                ('COLORS','LABELS','STYLE','MARKERS','LINESTYLES') for t in x.targets))]
+    exec(compile(ast.Module(body=nodes,type_ignores=[]),'tcc','exec'),env)
+    factors=('NCHN_tp','z500_anom_NCHN','sm_avg','NCVI_concurrent','TCC_Avg')
+    records=[dict(init_date=init,date=date,group=group,factor=factor,
+                  value=(0.4+i*.02 if factor=='TCC_Avg' else i*.02+1.0))
+             for init in env['INITS'] for factor in factors
+             for group in env['GROUPS']
+             for i,date in enumerate(pd.date_range('2023-06-14','2023-06-24'))]
+    # Required independent ERA5 NCVI line, with identical dates for both inits.
+    records += [dict(init_date=init,date=date,group='ERA5',factor='NCVI_concurrent',value=.01*i)
+                for init in env['INITS']
+                for i,date in enumerate(pd.date_range('2023-06-14','2023-06-24'))]
+    df=pd.DataFrame(records)
+    with plt.rc_context(env['STYLE']):
+        fig,axes=env['timeseries_figure'](df,factors,'Total')
+        assert axes[8].get_ylim()==(0.0,1.0)
+        assert axes[9].get_ylim()==(0.0,1.0)
+        assert np.array_equal(axes[8].get_yticks(),np.array([0,.25,.5,.75,1]))
+        assert axes[8].get_ylabel()=='TCC'
+        assert all(a.get_xlabel()=='' for a in axes)
+        assert env['figure_qc'](fig,axes)['text_extent_qc']=='PASS'
+        plt.close(fig)
+    bad=df.copy()
+    bad.loc[(bad.factor=='TCC_Avg')&(bad.group=='Hot17'),'value']=1.1
+    with plt.rc_context(env['STYLE']):
+        import pytest
+        with pytest.raises(ValueError,match='outside the physical fraction'):
+            env['timeseries_figure'](bad,factors,'Total')
