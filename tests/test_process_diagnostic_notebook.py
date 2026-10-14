@@ -33,6 +33,7 @@ def test_synthetic_panel_counts_alignment_text_and_boundary():
     exec(compile(ast.Module(body=nodes,type_ignores=[]),'layout','exec'),env)
     for window,factors,end,count in [('Total',('NCHN_tp','z500_anom_NCHN','sm_avg','NCVI_concurrent','TCC_Avg'),'2023-06-24',10),('Stage-I',('partial_fitted_Tmax','sm_avg','z500_anom_NCHN','SHF_Avg','NCVI_concurrent','TCC_Avg'),'2023-06-18',12)]:
         records=[dict(init_date=init,date=date,group=g,factor=f,value=0.5+i*.02,model_version='raw') for init in env['INITS'] for f in factors for g in env['GROUPS'] for i,date in enumerate(pd.date_range('2023-06-14',end))]
+        records += [dict(init_date=init,date=date,group='ERA5',factor='NCVI_concurrent',value=.01*i,model_version='raw') for init in env['INITS'] for i,date in enumerate(pd.date_range('2023-06-14',end))]
         with plt.rc_context(env['STYLE']):
             fig,axes=env['timeseries_figure'](pd.DataFrame(records),factors,window,'raw')
             assert len(axes)==count and fig.get_figwidth()==6.5
@@ -131,6 +132,7 @@ def test_daily_markers_land_exactly_on_labelled_ticks_and_scatter_stats_use_righ
                       model_version='raw')
                  for init in env['INITS'] for factor in factors for group in env['GROUPS']
                  for i,date in enumerate(pd.date_range('2023-06-14',end))]
+        records += [dict(init_date=init,date=date,group='ERA5',factor='NCVI_concurrent',value=.01*i,model_version='raw') for init in env['INITS'] for i,date in enumerate(pd.date_range('2023-06-14',end))]
         with plt.rc_context(env['STYLE']):
             fig,axes=env['timeseries_figure'](pd.DataFrame(records),factors,window,'raw')
             result=env['figure_qc'](fig,axes)
