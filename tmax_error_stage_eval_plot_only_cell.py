@@ -84,11 +84,7 @@ FONT_AXIS_LABEL = 9.5
 FONT_TICK = 8.7
 FONT_LEGEND = 8.4
 FONT_ANNOTATION = 8.3
-FONT_BAR_VALUE = 7.0
-BAR_VALUE_ROTATION = 0
-BAR_VALUE_BASE_OFFSET_PT = 3.0
-BAR_VALUE_STAGGER_PT = 12.0
-BAR_VALUE_CLOSE_PT = 11.0
+STAGE_DISPLAY_LABELS = {"Stage-I": "6.14–17", "Total": "Total"}
 FONT_DIAMOND_LEGEND = 7.2
 TIMESERIES_COLORS = {"ERA5": "black", "S2S": "royalblue", "interval": "deepskyblue"}
 BIAS_COLOR = "#5B8FD9"
@@ -426,9 +422,9 @@ def _write_fig2_caption(path):
         "ensemble mean for the forecast initialized on 12 June 2023, with the 25th–75th and "
         "5th–95th ensemble-percentile ranges shown by shading. The vertical line marks the end "
         "of Stage-I. (b) Ensemble-mean RMSE (upper) and signed Bias (lower) for forecasts "
-        "initialized on 1, 5, 8, and 12 June, evaluated for Stage-I (14–17 June) and the Total "
-        "period (14–24 June). (c) Member-wise RMSE distributions for Stage-I (upper) and the "
-        "Total period (lower) for the same initialization dates. All daily quantities follow "
+        "initialized on 1, 5, 8, and 12 June, evaluated for 14–17 June and the Total "
+        "period (14–24 June). (c) Member-wise RMSE distributions for the Total period (upper) "
+        "and 14–17 June (lower) for the same initialization dates. All daily quantities follow "
         "the upstream Beijing-time (UTC+8) processing. Each box contains n = 51 member RMSE "
         "values; boxes span the 25th–75th percentiles, center lines denote medians. "
         "Whiskers extend to the most extreme observations within 1.5 interquartile ranges "
@@ -500,116 +496,16 @@ def _draw_grouped_stage_bars(ax, metric_values, metric):
         ax.axhline(0, color="0.18", lw=0.9)
         ax.set_ylabel("Bias (°C)", fontsize=FONT_AXIS_LABEL)
 
-    # Estimate label widths without drawing; stagger nearby same-sign endpoints
-    # in points; reserve room only for the offsets actually assigned below.
-    axis_position = ax.get_position()
-    axis_height_pt = axis_position.height * ax.figure.get_figheight() * 72
-    axis_width_pt = axis_position.width * ax.figure.get_figwidth() * 72
-    x_span = group_centers[-1] - group_centers[0] + 1.04
-    lower_limit, upper_limit = ax.get_ylim()
-    label_height_pt = FONT_BAR_VALUE * 1.2 + 2 * 0.08 * FONT_BAR_VALUE
-    edge_clearance_pt = 2.0
-    # Exactly two offsets: near the endpoint, or one text-height farther out.
-    # The extra offset follows the axis height, without accumulating steps.
-    extra_offset_pt = min(BAR_VALUE_STAGGER_PT, 0.16 * axis_height_pt)
-    extra_offset_pt = max(label_height_pt + 1.0, extra_offset_pt)
-    baseline_lower, baseline_upper = lower_limit, upper_limit
-
-    def _choose_group_offsets(stage, low, high):
-        labels = []
-        for index, init in enumerate(INIT_ORDER):
-            value = metric_values[(stage, init)]
-            text = f"{value:.2f}" if metric == "rmse" else _format_signed_without_plus(value)
-            direction = 1 if value >= 0 else -1
-            width = len(text) * FONT_BAR_VALUE * 0.60 + 2 * 0.08 * FONT_BAR_VALUE
-            labels.append((value, direction, width, offsets[index] * axis_width_pt / x_span))
-
-        def rectangles(mask):
-            boxes = []
-            for index, (value, direction, width, x) in enumerate(labels):
-                offset = BAR_VALUE_BASE_OFFSET_PT + (extra_offset_pt if mask & (1 << index) else 0)
-                endpoint = (value - low) * axis_height_pt / (high - low) + direction * offset
-                bottom = endpoint if direction > 0 else endpoint - label_height_pt
-                boxes.append((x - width / 2, x + width / 2, bottom, bottom + label_height_pt))
-            return boxes
-
-        def conflicts(boxes):
-            pairs = []
-            for index in range(len(boxes) - 1):
-                # Only neighboring initialization labels can trigger staggering.
-                a, b = boxes[index], boxes[index + 1]
-                width = min(a[1], b[1]) - max(a[0], b[0]) + 1.0
-                height = min(a[3], b[3]) - max(a[2], b[2]) + 1.0
-                if width > 0 and height > 0:
-                    pairs.append((index, index + 1, width * height))
-            return pairs
-
-        eligible = set()
-        for first, second, _ in conflicts(rectangles(0)):
-            eligible.update((first, second))
-        candidates = []
-        for mask in range(1 << len(labels)):
-            if any(mask & (1 << index) and index not in eligible for index in range(len(labels))):
-                continue
-            collisions = conflicts(rectangles(mask))
-            # Consider all four together: minimize conflicts, then extra offsets.
-            score = (len(collisions), sum(item[2] for item in collisions), bin(mask).count("1"), mask)
-            candidates.append((score, mask))
-        mask = min(candidates)[1]
-        return {init: BAR_VALUE_BASE_OFFSET_PT + (extra_offset_pt if mask & (1 << index) else 0)
-                for index, init in enumerate(INIT_ORDER)}
-
-    label_offsets = {}
-    # Re-select the best two-tier assignment after changing the points/data
-    # scale. Both loops are bounded; final visual inspection remains necessary.
-    for _ in range(12):
-        selected = {(stage, init): offset for stage in stage_order
-                    for init, offset in _choose_group_offsets(stage, lower_limit, upper_limit).items()}
-        new_lower, new_upper = baseline_lower, baseline_upper
-        for _ in range(64):
-            previous_lower, previous_upper = new_lower, new_upper
-            for stage in stage_order:
-                for init in INIT_ORDER:
-                    value = metric_values[(stage, init)]
-                    fraction = (selected[(stage, init)] + label_height_pt + edge_clearance_pt) / axis_height_pt
-                    if value >= 0:
-                        new_upper = max(new_upper, (value - fraction * new_lower) / (1 - fraction))
-                    elif metric != "rmse":
-                        new_lower = min(new_lower, (value - fraction * new_upper) / (1 - fraction))
-            if max(abs(new_lower - previous_lower), abs(new_upper - previous_upper)) < 1e-10:
-                break
-        label_offsets = selected
-        lower_limit, upper_limit = new_lower, new_upper
-        final_selection = {(stage, init): offset for stage in stage_order
-                           for init, offset in _choose_group_offsets(stage, lower_limit, upper_limit).items()}
-        if final_selection == selected:
-            break
-    ax.set_ylim(lower_limit, upper_limit)
     for init_index, init in enumerate(INIT_ORDER):
         positions = group_centers + offsets[init_index]
         values = np.array([metric_values[(stage, init)] for stage in stage_order], dtype=float)
-        bars = ax.bar(
+        ax.bar(
             positions, values, width=bar_width, color=INIT_COLORS[init], alpha=BAR_ALPHA,
             edgecolor=EDGE_COLOR, linewidth=EDGE_LW, zorder=3,
         )
-        for stage, bar, value in zip(stage_order, bars, values):
-            direction = 1 if value >= 0 else -1
-            text = f"{value:.2f}" if metric == "rmse" else _format_signed_without_plus(value)
-            ax.annotate(
-                text, xy=(bar.get_x() + bar.get_width() / 2, value),
-                xytext=(0, direction * label_offsets[(stage, init)]),
-                textcoords="offset points",
-                ha="center",
-                va="bottom" if value >= 0 else "top",
-                fontsize=FONT_BAR_VALUE,
-                rotation=BAR_VALUE_ROTATION,
-                color="black", fontweight="bold",
-                bbox=dict(facecolor="white", edgecolor="none", boxstyle="square,pad=0.08"),
-                zorder=5,
-            )
     ax.set_xlim(group_centers[0] - 0.52, group_centers[-1] + 0.52)
     ax.set_xticks(group_centers)
-    ax.set_xticklabels(stage_order)
+    ax.set_xticklabels([STAGE_DISPLAY_LABELS[stage] for stage in stage_order])
     ax.tick_params(axis="x", which="both", length=0)
     _apply_axis_style(ax, grid_axis="y")
 
@@ -665,7 +561,7 @@ def _draw_member_rmse_boxes(ax, member_df, stage_df, stage, y_upper, seed):
     ax.set_xticks(positions, [INIT_LABELS[init] for init in INIT_ORDER])
     ax.set_ylabel("")
     _apply_axis_style(ax, grid_axis="y")
-    _add_internal_axis_title(ax, stage)
+    _add_internal_axis_title(ax, STAGE_DISPLAY_LABELS[stage])
     return data
 
 
@@ -711,10 +607,10 @@ def render_merged_fig2_from_csv(
         ax_init_legend = fig.add_subplot(legend_gs[1])
         ax_rmse_bar = fig.add_subplot(lower_gs[0, 0])
         ax_bias_bar = fig.add_subplot(lower_gs[2, 0], sharex=ax_rmse_bar)
-        ax_box_stage1 = fig.add_subplot(lower_gs[0, 1])
-        ax_box_total = fig.add_subplot(lower_gs[2, 1], sharex=ax_box_stage1, sharey=ax_box_stage1)
+        ax_box_total = fig.add_subplot(lower_gs[0, 1])
+        ax_box_stage1 = fig.add_subplot(lower_gs[2, 1], sharex=ax_box_total, sharey=ax_box_total)
         ax_diamond_legend = fig.add_subplot(lower_gs[1, 1])
-        # Set final geometry before point-based bar-label spacing is estimated.
+        # Keep all data and legend axes within the fixed canvas.
         fig.subplots_adjust(left=0.10, right=0.975, top=0.95, bottom=0.075)
 
         ax_ts.axvline(pd.Timestamp("2023-06-17 12:00"), color="0.25", lw=0.9, zorder=2)
@@ -778,12 +674,12 @@ def render_merged_fig2_from_csv(
         _add_panel_heading(ax_rmse_bar, "b", "Ensemble-mean metrics")
 
         _draw_member_rmse_boxes(
-            ax_box_stage1, member_df, stage_df, "Stage-I", member_y_upper, seed=20240612,
-        )
-        _draw_member_rmse_boxes(
             ax_box_total, member_df, stage_df, "Total", member_y_upper, seed=20240613,
         )
-        _add_panel_heading(ax_box_stage1, "c", "Member RMSE distributions")
+        _draw_member_rmse_boxes(
+            ax_box_stage1, member_df, stage_df, "Stage-I", member_y_upper, seed=20240612,
+        )
+        _add_panel_heading(ax_box_total, "c", "Member RMSE distributions")
         diamond = Line2D([], [], marker="D", linestyle="None", color="black", markersize=4.2)
         ax_diamond_legend.axis("off")
         ax_diamond_legend.legend(
@@ -792,8 +688,8 @@ def render_merged_fig2_from_csv(
             frameon=False, handletextpad=0.3, borderaxespad=0.0,
         )
 
-        box_top = ax_box_stage1.get_position()
-        box_bottom = ax_box_total.get_position()
+        box_top = ax_box_total.get_position()
+        box_bottom = ax_box_stage1.get_position()
         fig.text(box_top.x0 - 0.067, (box_top.y1 + box_bottom.y0) / 2,
                  "RMSE (°C)", rotation=90, ha="center", va="center",
                  fontsize=FONT_AXIS_LABEL)
@@ -1034,6 +930,10 @@ def _write_merged_fig2_qc(path, result):
         ),
         "init_order": ",".join(INIT_ORDER),
         "stage_order": "Stage-I,Total",
+        "bar_value_labels": False,
+        "bar_group_order": "Stage-I,Total (display: 6.14–17,Total)",
+        "boxplot_top_to_bottom": "Total,Stage-I (display: Total,6.14–17)",
+        "stage_display_labels": str(STAGE_DISPLAY_LABELS),
         "Stage-I dates": "2023-06-14 to 2023-06-17 (BJT)",
         "Stage-I n_days": EXPECTED_NDAYS["Stage-I"],
         "Total dates": "2023-06-14 to 2023-06-24 (BJT)",
@@ -1045,22 +945,14 @@ def _write_merged_fig2_qc(path, result):
         "black_diamond_definition": "RMSE of ensemble-mean forecast",
         "validation_tolerance_C": "atol=1e-6, rtol=0",
         "visual_collision_check": "manual check required after rendering",
-        "bar_value_label_qc": "inspect bar-label spacing and possible overlaps after the first actual rendering",
         "timeseries_colors": str(TIMESERIES_COLORS),
         "timeseries_interval_alpha": "p25-p75=0.30; p05-p95=0.14",
-        "bar_value_font_pt": FONT_BAR_VALUE,
-        "bar_value_rotation": BAR_VALUE_ROTATION,
-        "bar_value_style": "black bold; compact white square background, pad=0.08; no border or shadow",
-        "bar_value_offset_strategy": "two-tier point offsets outside signed endpoints; jointly select among 16 group assignments using estimated text/background rectangles; recheck after axis padding (12 iterations maximum)",
-        "bar_value_offset_points": f"base={BAR_VALUE_BASE_OFFSET_PT}; one extra offset uses configured stagger={BAR_VALUE_STAGGER_PT}, axis height and text height",
-        "bar_value_axis_padding": "actual assigned offsets plus estimated text/background height and 2-pt clearance; RMSE upper end only; Bias positive/negative ends separately",
-        "bar_value_stagger_height_control": "one extra offset scaled to axis height and estimated text/background height; no accumulated staircase",
         "member_rmse_ylabel": "single RMSE (°C), vertically centered left of both boxplot rows",
-        "diamond_legend_location": "dedicated inter-row axis, below Stage-I date labels and above Total",
+        "diamond_legend_location": "dedicated inter-row axis, below Total date labels and above 6.14–17",
         "diamond_legend_font_pt": FONT_DIAMOND_LEGEND,
         "central_legends": "two compact horizontal rows; no initialization title; dedicated nested GridSpec",
         "expected_merged_png_size_px": "3900 x 3840",
-        "visual_layout_qc": "manual inspection required after actual rendering: bar-value overlap, legend spacing, occlusion and clipping; no automatic visual validation",
+        "visual_layout_qc": "manual inspection required after actual rendering: window order, tick labels, legend spacing, occlusion and clipping; no automatic visual validation",
     }
     for row in validation_df.itertuples(index=False):
         prefix = f"{row.init}|{row.stage}"
