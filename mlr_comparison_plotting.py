@@ -10,7 +10,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.ticker import MaxNLocator, MultipleLocator
 
-from mlr_comparison_core import (INITS, WINDOWS, VERSIONS, METHODS, LABELS,
+from mlr_comparison_core import (INITS, WINDOWS, METHODS, LABELS,
                                  TABLE_FILES, predictors, output_guard, ATOL)
 
 WIDTH = 6.5
@@ -21,7 +21,9 @@ STYLE = {"font.family": "sans-serif", "font.sans-serif": ["Arial", "DejaVu Sans"
          "pdf.fonttype": 42, "ps.fonttype": 42,
          "axes.linewidth": 0.8, "xtick.labelsize": 8.5, "ytick.labelsize": 8.5,
          "axes.labelsize": 9.5, "axes.titlesize": 9.5}
-FIGURE_IDS = {"Total": (3, 4, "Total"), "Stage-I": (9, 10, "StageI")}
+FIGURE_IDS = {"Total": (3, 4, "Total"), "Stage-I": (9, 10, "June14_17")}
+FIGURE_VERSION = "residualized"
+FIGURE_REVISION = "lofo_deltaR2_v1"
 IMPORTANCE_REFERENCE_ORDER = {
     'Total': ('NCHN_tp', 'z500_anom_NCHN', 'NCVI_concurrent', 'TCC_resid',
               'Initial_MSEstar_max_NCHN', 'SM_resid'),
@@ -86,8 +88,14 @@ def load_results(output_root):
                     im = ii[ii.method == method].sort_values('position')
                     if im.predictor.tolist() != predictors(w, v) or im.position.tolist() != list(range(1, 7)):
                         raise ValueError('Importance mapping mismatch')
-                    if not np.isfinite(im.importance_pct).all() or abs(im.importance_pct.sum() - 100) > 1e-7:
-                        raise ValueError('Undefined/unnormalized importance; do not render')
+                    if method == 'LOFO':
+                        delta = im.raw_value.to_numpy(float)
+                        if not np.isfinite(delta).all() or (delta < -1e-8).any():
+                            raise ValueError('LOFO full-minus-reduced R2 invalid')
+                        if not np.allclose(delta, ss.iloc[0].R2-im.R2_without_factor.to_numpy(float),rtol=0,atol=1e-8):
+                            raise ValueError('LOFO delta R2 audit mismatch')
+                    elif not np.isfinite(im.importance_pct).all() or abs(im.importance_pct.sum() - 100) > 1e-7:
+                        raise ValueError('Invalid LMG/Johnson percent shares')
             r, a = member_groups
             if not np.array_equal(r.y_tmax.to_numpy(), a.y_tmax.to_numpy()) or np.max(np.abs(r.y_fitted.to_numpy() - a.y_fitted.to_numpy())) > ATOL:
                 raise ValueError(f'Paired fitting QC failed {init}/{w}')
@@ -110,8 +118,12 @@ def figure_plan(data):
             xticks = xticks[(xticks >= limits[0]) & (xticks <= limits[1])]
             yticks = np.arange(limits[0], limits[1] + step / 2, step)
             scatter[(init, w)] = {'limits': limits, 'xticks': xticks.tolist(), 'yticks': yticks.tolist()}
-    bars = {m: max(float(data['importance'].loc[data['importance'].method == m, 'importance_pct'].max()) * 1.55, 10.0)
-            for m in METHODS}
+    bars = {}
+    for method in METHODS:
+        column = 'raw_value' if method == 'LOFO' else 'importance_pct'
+        vals = data['importance'].loc[(data['importance'].method==method)&(data['importance'].version==FIGURE_VERSION),column].to_numpy(float)
+        if not np.isfinite(vals).all(): raise ValueError(f'Nonfinite {method} values')
+        bars[method] = max(float(vals.max())*1.35, 0.01 if method=='LOFO' else 10.0)
     order = {}
     for w in WINDOWS:
         reference = importance_order(data, w)
@@ -142,13 +154,13 @@ def scatter_figure(data, plan, window, version):
         slope, intercept = np.polyfit(y, fitted, 1)
         xx = np.asarray(limits['limits'])
         ax.plot(xx, slope * xx + intercept, color='0.38', lw=0.9, alpha=0.78)
-        ax.text(0.04, 0.96, f'r = {np.corrcoef(y, fitted)[0, 1]:.2f}\nR² = {s.R2:.2f}\nslope = {slope:.2f}',
+        ax.text(0.04, 0.96, f'R² = {s.R2:.2f}\nslope = {slope:.2f}',
                 transform=ax.transAxes, va='top', ha='left', fontsize=8.0,
                 bbox=dict(facecolor='white', edgecolor='0.80', alpha=0.86, boxstyle='round,pad=0.25'))
         ax.set_xlim(limits['limits']); ax.set_ylim(limits['limits'])
         ax.set_xticks(limits['xticks']); ax.set_yticks(limits['yticks'])
-        ax.set_xlabel('ECMWF member Tmax (°C)')
-        ax.set_ylabel('MLR fitted Tmax (°C)')
+        ax.set_xlabel('ECMWF Tmax (°C)')
+        ax.set_ylabel('MLR predicted Tmax (°C)')
         ax.set_title(f'({chr(97+p)}) {pd.Timestamp(init).day} Jun', loc='left', pad=8)
         _base(ax)
     # Explicit equal axes boxes; aspect remains automatic, no data-unit aspect lock.
@@ -165,7 +177,7 @@ def importance_figure(data, plan, window, version):
                           top=0.92, wspace=0.19, hspace=0.60)
     axes, value_texts = [], []
     row_headers = ('LMG relative importance (%)', 'Johnson relative weights (%)',
-                   'Normalized positive ΔR² (%)')
+                   'R² reduction (ΔR²)')
     for row, method in enumerate(METHODS):
         for col, init in enumerate(INITS):
             ax = fig.add_subplot(grid[row, col])
@@ -175,7 +187,8 @@ def importance_figure(data, plan, window, version):
             g = data['importance']
             g = g[(g.init_date == init) & (g.window == window) & (g.version == version) & (g.method == method)].set_index('position')
             g = g.loc[order]
-            vals = g.importance_pct.to_numpy()
+            vals = g.raw_value.to_numpy(float) if method=='LOFO' else g.importance_pct.to_numpy(float)
+            if not np.isfinite(vals).all() or (method=='LOFO' and np.min(vals)<-1e-8):raise ValueError('Invalid bar values')
             ax.barh(np.arange(6), vals, color=COLORS[method], alpha=0.88, height=0.66)
             ax.set_yticks(np.arange(6), [LABELS[n] for n in g.predictor], fontsize=8.0)
             # Slightly emphasize factor names in the first column.
@@ -191,14 +204,11 @@ def importance_figure(data, plan, window, version):
                 ax.spines[side].set_visible(False)
             ax.spines['left'].set_color('0.80')
             ax.spines['left'].set_linewidth(0.6)
-            # Bar labels carry exact percentages; retain the shared internal scale.
-            ax.set_xticks([])
-            ax.set_xticks([], minor=True)
-            ax.tick_params(axis='x', which='both', bottom=False, top=False,
-                           labelbottom=False, labeltop=False)
-            ax.grid(False, axis='x', which='both')
+            ax.xaxis.set_major_locator(MaxNLocator(nbins=3, min_n_ticks=3))
+            ax.tick_params(axis='x',bottom=True,labelbottom=True,labelsize=8)
             for y, v in enumerate(vals):
-                t = ax.text(v, y, f'{v:.1f}%', va='center', ha='left', color='black',
+                label = f'{v:.3f}' if method == 'LOFO' else f'{v:.1f}%'
+                t = ax.text(v, y, label, va='center', ha='left', color='black',
                             fontweight='bold', fontsize=8.0)
                 value_texts.append((ax, t, float(v), y))
             axes.append(ax)
@@ -302,12 +312,15 @@ def pdf_importance_qc(path):
         embedded = all(bool(doc.extract_font(f[0])[3]) for f in fonts)
         vector = bool(lines) and not page.get_images() and all(f[2] != 'Type3' for f in fonts)
         percentages = re.findall(r'\d+\.\d%', '\n'.join(t for t, _ in lines))
+        # Expect 48 LMG/Johnson percent value labels and 24 LOFO decimal labels.
+        numeric_decimal = re.findall(r'(?<![\\d.])\\d+\\.\\d{3}(?!\\d)', '\\n'.join(t for t, _ in lines))
         minimum = float(min(sizes)) if sizes else 0.0
         return {'pdf_min_font_pt': minimum, 'pdf_embedded_fonts': embedded,
                 'pdf_editable_vector_text': vector, 'pdf_percentage_labels': len(percentages),
+                'pdf_lofo_decimal_labels':len(numeric_decimal),
                 'pdf_text_collisions': collisions, 'pdf_clipped_text': clipped,
                 'pdf_status': 'PASS' if minimum >= 7.5 and embedded and vector and
-                len(percentages) == 72 and not clipped and not collisions else 'FAIL'}
+                len(percentages) >= 48 and len(numeric_decimal) >= 24 and not clipped and not collisions else 'FAIL'}
 
 
 def make_figures(data, plan, kind):
@@ -315,7 +328,7 @@ def make_figures(data, plan, kind):
     with plt.rc_context(STYLE):
         for window in WINDOWS:
             scatter_id, importance_id, stem = FIGURE_IDS[window]
-            for version in VERSIONS:
+            for version in (FIGURE_VERSION,):
                 number = scatter_id if kind == 'scatter' else importance_id
                 factory = scatter_figure if kind == 'scatter' else importance_figure
                 fig, axes, values = factory(data, plan, window, version)
@@ -325,7 +338,7 @@ def make_figures(data, plan, kind):
                     if qc['alignment_status'] != 'PASS':
                         qc['status'] = 'FAIL'
                 qc.update({'figure': f'Fig{number}', 'window': window, 'version': version,
-                           'basename': f'Fig{number}_{stem}_{version}' + ('_layout_v3' if kind == 'importance' else ''),
+                           'basename': f'Fig{number}_{stem}_{version}_{FIGURE_REVISION}',
                            'axes': [{'xlim': list(a.get_xlim()), 'ylim': list(a.get_ylim()),
                                      'xticks': a.get_xticks().tolist(), 'yticks': a.get_yticks().tolist()} for a in axes]})
                 built.append({'fig': fig, 'qc': qc})
@@ -335,43 +348,26 @@ def make_figures(data, plan, kind):
 def save_figures(built, input_root, output_root):
     out = output_guard(input_root, output_root)
     numbers = {b['qc']['figure'] for b in built}
-    if (len(built), numbers) not in [(8, {'Fig3', 'Fig4', 'Fig9', 'Fig10'}),
-                                   (4, {'Fig4', 'Fig10'})]:
-        raise ValueError('Expected all eight figures or the four layout-v3 importance figures')
-    # Verify the final raw/resid axes and actual ticks rather than merely intentions.
-    for number in (3, 4, 9, 10):
-        if f'Fig{number}' not in numbers:
-            continue
-        pair = [b for b in built if b['qc']['figure'] == f'Fig{number}']
-        if len(pair) != 2 or pair[0]['qc']['axes'] != pair[1]['qc']['axes']:
-            raise ValueError(f'Raw/residualized axes mismatch Fig{number}')
+    if len(built)!=4 or numbers!={'Fig3','Fig4','Fig9','Fig10'}:
+        raise ValueError('Expected four residualized-only figures')
+    if any(x['qc']['version']!=FIGURE_VERSION for x in built):
+        raise ValueError('Raw versions are excluded from main figures')
     qcs = [b['qc'] for b in built]
-    if any(q['figure'] in ('Fig4', 'Fig10') and not q['basename'].endswith('_layout_v3') for q in qcs):
-        raise ValueError('Importance exports must use layout_v3 names to preserve prior formal figures')
     (out / 'qc').mkdir(parents=True, exist_ok=True)
-    qc_path = out / 'qc/figure_layout_v3_qc.json'
+    qc_path = out / ('qc/figure_'+FIGURE_REVISION+'_qc.json')
     qc_path.write_text(json.dumps(qcs, indent=2), encoding='utf-8')
     if any(q['status'] != 'PASS' for q in qcs):
-        raise ValueError('Rendered figure layout QC failed; inspect figure_layout_v3_qc.json. No figure files exported.')
+        raise ValueError('Rendered figure layout QC failed; inspect revision-specific QC file. No figure files exported.')
     (out / 'figures').mkdir(parents=True, exist_ok=True)
     manifest = []
     for b in built:
         fig, qc = b['fig'], b['qc']
         stem = out / 'figures' / qc['basename']
-        # Fixed canvas: never bbox_inches="tight". Explicit None avoids inherited rc.
-        # Existing Fig.3/9 exports remain untouched during an importance redesign.
-        if (qc['figure'] in ('Fig3', 'Fig9') and
-                stem.with_suffix('.png').is_file() != stem.with_suffix('.pdf').is_file()):
-            raise ValueError(f'Incomplete existing scatter pair {stem}; export importance figures only')
-        keep_scatter = qc['figure'] in ('Fig3', 'Fig9') and stem.with_suffix('.png').is_file() and stem.with_suffix('.pdf').is_file()
-        if not keep_scatter:
-            fig.savefig(stem.with_suffix('.png'), dpi=DPI, bbox_inches=None)
-            if qc['figure'] in ('Fig4', 'Fig10'):
-                # PDF font embedding is selected at export, outside the creation rc_context.
-                with plt.rc_context({'pdf.fonttype': 42, 'ps.fonttype': 42}):
-                    fig.savefig(stem.with_suffix('.pdf'), bbox_inches=None)
-            else:
-                fig.savefig(stem.with_suffix('.pdf'), bbox_inches=None)
+        if stem.with_suffix('.png').exists() or stem.with_suffix('.pdf').exists():
+            raise FileExistsError(f'No figure overwrite allowed: {stem}')
+        fig.savefig(stem.with_suffix('.png'), dpi=DPI, bbox_inches=None)
+        with plt.rc_context({'pdf.fonttype': 42, 'ps.fonttype': 42}):
+            fig.savefig(stem.with_suffix('.pdf'), bbox_inches=None)
         png, pdf = stem.with_suffix('.png'), stem.with_suffix('.pdf')
         width, height = struct.unpack('>II', png.read_bytes()[16:24])
         box = re.search(rb'/MediaBox\s*\[\s*0\s+0\s+([\d.]+)\s+([\d.]+)', pdf.read_bytes())
@@ -394,5 +390,5 @@ def save_figures(built, input_root, output_root):
                          'png_sha256': hashlib.sha256(png.read_bytes()).hexdigest(),
                          'pdf_sha256': hashlib.sha256(pdf.read_bytes()).hexdigest(), 'status': 'PASS'})
         plt.close(fig)
-    pd.DataFrame(manifest).to_csv(out / 'qc/table_figure_layout_v3_manifest.csv', index=False)
+    pd.DataFrame(manifest).to_csv(out / ('qc/table_figure_'+FIGURE_REVISION+'_manifest.csv'), index=False)
     return pd.DataFrame(manifest)
