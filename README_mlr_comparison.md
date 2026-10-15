@@ -204,3 +204,16 @@ The Codex environment has no `/data1/huangy/...` CSVs. **The 16 genuine models,
 eight genuine figure pairs, historical reproduction and actual scientific ranking
 changes are pending HPC execution.** No conclusions or preferred model version
 are selected by this implementation.
+
+
+## JGR figure revision — original LOFO ΔR² (branch feature/mlr-figures-lofo-raw-delta-r2)
+
+This isolated branch starts from `dev/jgr-major-revision` and imports audited PR #12 MLR helpers without merging old history. Its output policy supersedes earlier eight-figure and layout-v3 directions in this README.
+
+- **Paper figures only:** `Fig3_Total_residualized_lofo_deltaR2_v1`, `Fig4_Total_residualized_lofo_deltaR2_v1`, `Fig9_June14_17_residualized_lofo_deltaR2_v1`, and `Fig10_June14_17_residualized_lofo_deltaR2_v1`; each as PNG 600 dpi and vector PDF.
+- **Fig.3 and Fig.9:** x-axis `ECMWF Tmax (°C)`; y-axis `MLR predicted Tmax (°C)`; model R² and fitted slope only, no Pearson r annotation. The fitted member values/MLR remain unchanged. Figure title uses 14–17 June rather than Stage-I.
+- **Fig.4 and Fig.10:** first row LMG %, second row Johnson %, third row original LOFO ΔR² = R²(full) − R²(delete predictor k), **not** normalized to percentages. Predictor standardization, residualization, sample 51, and same-predictor OLS deletion refit are unmodified. LMG/Johnson percentages still sum to 100%. LOFO does not partition model R² and is not commensurate with percentage-based weights. All three rows show numeric x ticks; method-specific shared scales across four inits, fixed predictor positions.
+- **Audit output:** `tables/table_mlr_lofo_original_delta_r2_residualized.csv` preserves full/deleted R² and original ΔR². `importance_pct` in the imported comparison table retains its **legacy historical comparison role**, never used for LOFO in new paper figures. A nested in-sample OLS ∆R² below −1e-8 is a QC error.
+- **Provenance:** `SOURCE_COMMIT` points to original historical MLR method definition, not to HPC HEAD. This branch never overwrites historical outputs. Use a **fresh** `MLR_OUTPUT_ROOT` rather than `mlr_raw_residual_comparison` already used by PR #12. Historical raw-versus-residualized numerical comparisons remain in source for audit; the figure notebook exports only four residualized plots. Genuine HPC results, actual figure appearance, and PDF font checks remain to be evaluated on HPC.
+
+Run order: first `mlr_raw_residual_comparison.ipynb` to generate and audit model tables in a **new** output root, then `mlr_comparison_figures.ipynb` with the same root. Both notebooks use precomputed HPC stage CSVs, not GRIB files. The independent plot renderer does not refit models. Check the new `qc/figure_lofo_deltaR2_v1_qc.json` and `qc/table_figure_lofo_deltaR2_v1_manifest.csv`, and send genuine PNG/PDF for final review.
