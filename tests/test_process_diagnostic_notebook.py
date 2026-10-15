@@ -28,7 +28,7 @@ def test_selfcontained_and_explicit_diagnostic_contract():
 
 
 def test_synthetic_panel_counts_alignment_text_and_boundary():
-    env=dict(np=np,pd=pd,plt=plt,mdates=mdates,Line2D=Line2D,MaxNLocator=MaxNLocator,INITS=('2023-06-08','2023-06-12'),GROUPS=('Hot17','Middle17','Cold17'))
+    env=dict(TCC_SOURCE_UNITS={'S2S':'auto','ERA5':'auto'},BAND_COLUMNS=('value_lower','value_upper'),np=np,pd=pd,plt=plt,mdates=mdates,Line2D=Line2D,MaxNLocator=MaxNLocator,INITS=('2023-06-08','2023-06-12'),GROUPS=('Hot17','Middle17','Cold17'))
     nodes=[n for n in ast.parse(''.join(nb()['cells'][4]['source'])).body if isinstance(n,(ast.FunctionDef,ast.Assign)) and (isinstance(n,ast.FunctionDef) or any(isinstance(t,ast.Name) and t.id in ['COLORS','LABELS','STYLE','MARKERS','LINESTYLES'] for t in n.targets))]
     exec(compile(ast.Module(body=nodes,type_ignores=[]),'layout','exec'),env)
     for window,factors,end,count in [('Total',('NCHN_tp','z500_anom_NCHN','sm_avg','NCVI_concurrent','TCC_Avg'),'2023-06-24',10),('Stage-I',('partial_fitted_Tmax','sm_avg','z500_anom_NCHN','SHF_Avg','NCVI_concurrent','TCC_Avg'),'2023-06-18',12)]:
@@ -48,7 +48,7 @@ def test_scatter_layout_and_explicit_plot_tables():
     for name in ['fig5_total_timeseries_plot.csv','fig11_stageI_timeseries_','figS11_stageI_scatter_','group_membership_audit.csv','consistency_manifest.json']:
         assert name in whole
     assert 'fig.suptitle' not in whole
-    env=dict(np=np,pd=pd,plt=plt,mdates=mdates,Line2D=Line2D,MaxNLocator=MaxNLocator,INITS=('2023-06-08','2023-06-12'),GROUPS=('Hot17','Middle17','Cold17'))
+    env=dict(TCC_SOURCE_UNITS={'S2S':'auto','ERA5':'auto'},BAND_COLUMNS=('value_lower','value_upper'),np=np,pd=pd,plt=plt,mdates=mdates,Line2D=Line2D,MaxNLocator=MaxNLocator,INITS=('2023-06-08','2023-06-12'),GROUPS=('Hot17','Middle17','Cold17'))
     nodes=[n for n in ast.parse(''.join(nb()['cells'][4]['source'])).body if isinstance(n,(ast.FunctionDef,ast.Assign)) and (isinstance(n,ast.FunctionDef) or any(isinstance(t,ast.Name) and t.id in ['COLORS','LABELS','STYLE','MARKERS','LINESTYLES'] for t in n.targets))]
     exec(compile(ast.Module(body=nodes,type_ignores=[]),'scatter','exec'),env)
     records=[dict(init_date=init,member=m,group=env['GROUPS'][m//17],model_version=v,sm_avg=.15+m*.001,y_tmax=30+m*.08,partial_fitted_Tmax=31+m*.04+(.1 if v=='raw' else 0)) for init in env['INITS'] for v in ['raw','residualized'] for m in range(51)]
@@ -101,20 +101,22 @@ def test_pdf_qc_rejects_size_and_small_body_and_classifies_scripts():
 def test_cell4_member_diagnostic_branch_executes_dict_y(tmp_path):
     source=''.join(nb()['cells'][3]['source'])
     # Execute the actual notebook branch from stage-input loading through pairing.
-    branch=source[source.index('stage_members=pd.read_csv(STAGE)'):source.index('for variable in FACTORS11:')]
-    stage=pd.DataFrame([dict(init_date=init,stage='Stage-I',member=m,y_tmax=30+m*.1,sm_avg=.15+m*.001,SHF_Avg=50+m) for init in ['2023-06-08','2023-06-12'] for m in range(51)])
+    branch=source[source.index('stage_members=pd.read_csv(STAGE)'):source.index('# Validate saved member scalars')]
+    stage=pd.DataFrame([dict(init_date=init,stage='Stage-I',member=m,y_tmax=30+m*.1,sm_avg=.15+m*.001,SHF_Avg=50+m,z500_anom_NCHN=20+m) for init in ['2023-06-08','2023-06-12'] for m in range(51)])
     path=tmp_path/'stage.csv';stage.to_csv(path,index=False)
     groups=stage[['init_date','member']].copy();groups['window']='Stage-I';groups['group']=['Hot17' if m<17 else 'Middle17' if m<34 else 'Cold17' for m in groups.member]
     calls=[]
     def parameters(data,init,version):
         calls.append((init,version))
-        return {'y':stage[stage.init_date==init].set_index('member').y_tmax.copy(),'version':version}
-    env=dict(np=np,pd=pd,STAGE=path,INITS=('2023-06-08','2023-06-12'),VERSIONS=('raw','residualized'),
+        return {'y':stage[stage.init_date==init].set_index('member').y_tmax.copy(),'version':version,'design':pd.DataFrame({'NCVI_concurrent':np.linspace(-.1,.1,51)},index=np.arange(51))}
+    env=dict(np=np,pd=pd,STAGE=path,EARLY_INITS=('2023-06-08','2023-06-12'),VERSIONS=('residualized',),
              normalize_window=lambda s:s,parameters=parameters,data={},current_groups=groups,
              residual_relation=lambda data,init:(0.,1.),
              partial_fitted_tmax=lambda sm,shf,model,relation:(np.asarray(sm)+np.asarray(shf)+(1 if model['version']=='raw' else 0),np.asarray(shf)))
     exec(compile(branch,'actual-cell4-member-branch','exec'),env)
-    assert len(calls)==4 and len(env['scatter_table'])==204
+    assert len(calls)==2 and len(env['scatter_table'])==102
+    assert set(env['scatter_table'].model_version)=={'residualized'}
+    assert np.allclose(env['scatter_table'].NCVI_concurrent.iloc[:51],np.linspace(-.1,.1,51))
     assert 'atol=1e-8' in branch
     import pytest
     def mismatched_parameters(data,init,version):
@@ -126,7 +128,7 @@ def test_cell4_member_diagnostic_branch_executes_dict_y(tmp_path):
 
 def test_daily_markers_land_exactly_on_labelled_ticks_and_scatter_stats_use_right_side():
     """Exercise true plotting functions, not only their static strings."""
-    env=dict(np=np,pd=pd,plt=plt,mdates=mdates,Line2D=Line2D,MaxNLocator=MaxNLocator,
+    env=dict(TCC_SOURCE_UNITS={'S2S':'auto','ERA5':'auto'},BAND_COLUMNS=('value_lower','value_upper'),np=np,pd=pd,plt=plt,mdates=mdates,Line2D=Line2D,MaxNLocator=MaxNLocator,
              INITS=('2023-06-08','2023-06-12'),GROUPS=('Hot17','Middle17','Cold17'))
     ast_nodes=[node for node in ast.parse(''.join(nb()['cells'][4]['source'])).body
                if isinstance(node,(ast.FunctionDef,ast.Assign)) and
@@ -225,13 +227,13 @@ def test_era5_ncvi_is_in_all_physical_and_missing_curve_is_fatal():
     fig=''.join(nb()['cells'][4]['source'])
     assert 'all_physical=pd.concat([all_physical,era5_ncvi_long]' in source
     assert "hashes['era5_ncvi']" in source
-    assert "if factor == 'NCVI_concurrent':" in fig
+    assert "if factor=='NCVI_concurrent':" in fig
     assert 'Mandatory ERA5 NCVI reference missing' in fig
     assert "'era5_ncvi_source_qc':era5_ncvi_audit" in ''.join(nb()['cells'][5]['source'])
 
 
 def test_tcc_fixed_physical_ylim_and_no_extra_date_axis_title():
-    env=dict(np=np,pd=pd,plt=plt,mdates=mdates,Line2D=Line2D,MaxNLocator=MaxNLocator,
+    env=dict(TCC_SOURCE_UNITS={'S2S':'auto','ERA5':'auto'},BAND_COLUMNS=('value_lower','value_upper'),np=np,pd=pd,plt=plt,mdates=mdates,Line2D=Line2D,MaxNLocator=MaxNLocator,
              INITS=('2023-06-08','2023-06-12'),GROUPS=('Hot17','Middle17','Cold17'))
     nodes=[x for x in ast.parse(''.join(nb()['cells'][4]['source'])).body
            if isinstance(x,(ast.FunctionDef,ast.Assign)) and
@@ -252,16 +254,141 @@ def test_tcc_fixed_physical_ylim_and_no_extra_date_axis_title():
     df=pd.DataFrame(records)
     with plt.rc_context(env['STYLE']):
         fig,axes=env['timeseries_figure'](df,factors,'Total')
-        assert axes[8].get_ylim()==(0.0,1.0)
-        assert axes[9].get_ylim()==(0.0,1.0)
-        assert np.array_equal(axes[8].get_yticks(),np.array([0,.25,.5,.75,1]))
-        assert axes[8].get_ylabel()=='TCC'
+        assert axes[8].get_ylim()==(0.0,100.0)
+        assert axes[9].get_ylim()==(0.0,100.0)
+        assert np.array_equal(axes[8].get_yticks(),np.array([0,25,50,75,100]))
+        assert axes[8].get_ylabel()=='Total cloud cover (%)'
         assert all(a.get_xlabel()=='' for a in axes)
         assert env['figure_qc'](fig,axes)['text_extent_qc']=='PASS'
         plt.close(fig)
     bad=df.copy()
-    bad.loc[(bad.factor=='TCC_Avg')&(bad.group=='Hot17'),'value']=1.1
+    bad.loc[(bad.factor=='TCC_Avg')&(bad.group=='Hot17'),'value']=101
     with plt.rc_context(env['STYLE']):
         import pytest
-        with pytest.raises(ValueError,match='outside the physical fraction'):
+        with pytest.raises(ValueError,match=r'outside \[0,100\]'):
             env['timeseries_figure'](bad,factors,'Total')
+
+
+def plotting_env():
+    env=dict(np=np,pd=pd,plt=plt,mdates=mdates,Line2D=Line2D,MaxNLocator=MaxNLocator,
+             INITS=('2023-06-08','2023-06-12'),GROUPS=('Hot17','Middle17','Cold17'),
+             TCC_SOURCE_UNITS={'S2S':'auto','ERA5':'auto'},BAND_COLUMNS=('value_lower','value_upper'))
+    nodes=[node for node in ast.parse(''.join(nb()['cells'][4]['source'])).body
+           if isinstance(node,ast.FunctionDef) or isinstance(node,ast.Assign) and
+           any(isinstance(t,ast.Name) and t.id in ('COLORS','LABELS','STYLE','MARKERS','LINESTYLES') for t in node.targets)]
+    exec(compile(ast.Module(body=nodes,type_ignores=[]),'plot','exec'),env)
+    return env
+
+
+def test_percentage_sources_are_not_multiplied_twice_and_csv_is_unchanged():
+    env=plotting_env()
+    source=pd.DataFrame(dict(factor=['TCC_Avg']*4,group=['Hot17','Cold17','ERA5','ERA5'],
+                             value=[.2,.8,20.,80.],value_lower=[.1,.7,10.,70.],value_upper=[.3,.9,30.,90.]))
+    before=source.copy(deep=True)
+    result,audit=env['display_units'](source)
+    pd.testing.assert_frame_equal(source,before)
+    assert result.value.tolist()==[20.,80.,20.,80.]
+    assert result.value_lower.tolist()==[10.,70.,10.,70.]
+    assert {r['source']:r['multiplier'] for r in audit}=={'S2S':100.,'ERA5':1.}
+    env['TCC_SOURCE_UNITS']['ERA5']='percent'
+    tiny=source.iloc[2:].copy();tiny['value']=[.2,.8]
+    result,_=env['display_units'](tiny)
+    assert result.value.tolist()==[.2,.8]
+
+
+def test_requested_limits_expand_to_include_all_curves_and_uncertainty_bands():
+    env=plotting_env()
+    frame=pd.DataFrame(dict(init_date=['2023-06-08']*2,group=['ERA5']*2,value=[0.,80.],
+                            value_lower=[-75.,70.],value_upper=[5.,125.]))
+    bounds,ticks,info=env['row_limits'](frame,'z500_anom_NCHN','Total')
+    assert bounds==(-75.,125.) and info['expanded']
+    assert np.allclose(np.diff(ticks),25)
+    for factor,expected,step in [('NCHN_tp',(-1.,10.),1),('NCVI_concurrent',(-.3,.25),.05)]:
+        f=frame.drop(columns=['value_lower','value_upper']).copy();f['value']=[0.,.1]
+        bounds,ticks,info=env['row_limits'](f,factor,'Total')
+        assert bounds==expected and not info['expanded']
+        assert np.allclose(np.diff(ticks),step)
+        if factor=='NCHN_tp':assert np.min(ticks)==0
+    import pytest
+    invalid=frame.copy();invalid.loc[0,'value_lower']=1.
+    with pytest.raises(ValueError,match='do not contain'):env['row_limits'](invalid,'z500_anom_NCHN','Total')
+
+
+def test_new_early_circulation_scatter_uses_correct_dates_factors_and_window_label(tmp_path):
+    env=plotting_env();pair=('2023-06-01','2023-06-05')
+    df=pd.DataFrame([dict(init_date=init,member=m,group=env['GROUPS'][m//17],model_version='residualized',
+                         y_tmax=30+m*.07+np.sin(m)*.2,z500_anom_NCHN=-30+m*2,
+                         NCVI_concurrent=-.15+m*.005,sm_avg=.1+m*.002,partial_fitted_Tmax=31+m*.04)
+                     for init in pair for m in range(51)])
+    with plt.rc_context(env['STYLE']):
+        fig,axes=env['scatter_figure'](df,'residualized',inits=pair,factors=('z500_anom_NCHN','NCVI_concurrent'))
+        assert axes[0].get_xlabel()=='Z500 anomaly (gpm)'
+        assert axes[2].get_xlabel()=='NCVI anomaly (PVU)'
+        assert all(a.get_ylabel()=='6.14–17 Tmax (°C)' for a in axes)
+        assert [t.get_text() for t in fig.texts]==['01 June 2023','05 June 2023']
+        assert all(t.get_ha()=='right' for a in axes for t in a.texts if 'n = 51' in t.get_text())
+        assert env['figure_qc'](fig,axes)['text_extent_qc']=='PASS'
+        path=tmp_path/'circulation.pdf';fig.savefig(path)
+        import fitz
+        with fitz.open(path) as doc:assert env['pdf_page_qc'](doc[0],fig.get_figheight())['status']=='PASS'
+        plt.close(fig)
+
+
+def test_config_separates_total_and_exploratory_early_pairs_and_frozen_math():
+    source=''.join(nb()['cells'][0]['source'])
+    assert "TOTAL_INITS=('2023-06-08','2023-06-12')" in source
+    assert "EARLY_PAIRS=(('2023-06-08','2023-06-12'),('2023-06-01','2023-06-05'))" in source
+    assert "VERSIONS=('residualized',)" in source
+    # These numerical definitions must remain independent of the plotting repair.
+    tree=ast.parse(''.join(nb()['cells'][1]['source']))
+    names={'parameters','residual_relation','partial_fitted_tmax'}
+    assert names <= {node.name for node in tree.body if isinstance(node,ast.FunctionDef)}
+    for node in ast.walk(tree):
+        if isinstance(node,ast.Call) and isinstance(node.func,ast.Attribute):
+            assert node.func.attr not in {'fit','lstsq','polyfit'}
+
+
+def test_early_ncvi_export_changes_configuration_only():
+    baseline=json.loads((ROOT/'ncvi_daily_export_standalone.ipynb').read_text())
+    early=json.loads((ROOT/'ncvi_daily_export_early_0601_0605.ipynb').read_text())
+    assert len(early['cells'])==6
+    assert early['cells'][1:]==baseline['cells'][1:]
+    config=''.join(early['cells'][0]['source'])
+    assert "INITS = ('2023-06-01', '2023-06-05')" in config
+    assert 'ncvi_daily_standalone/run_early_0601_0605' in config
+    for cell in early['cells']:
+        ast.parse(''.join(cell['source']))
+        assert cell['execution_count'] is None and not cell['outputs']
+
+
+def test_multiple_ncvi_exports_require_exact_coverage_and_preserve_historical_fail(tmp_path):
+    import hashlib,pytest
+    source=''.join(nb()['cells'][2]['source'])
+    branch=source[source.index('def snapshot_ncvi_runs():'):source.index('pieces=[]')]
+    runs=[]
+    for k,pair in enumerate([('2023-06-08','2023-06-12'),('2023-06-01','2023-06-05')]):
+        run=tmp_path/str(k);run.mkdir();runs.append(run)
+        daily=pd.DataFrame([dict(init_date=init,date=date,member=m,units='PVU',anomaly_used=True,daily_ncvi_anomaly_pvu=.1)
+                            for init in pair for date in pd.date_range('2023-06-14','2023-06-24') for m in range(51)])
+        replay=pd.DataFrame([dict(init_date=init,window=w,member=m,daily_equal_day_aggregate=.1,
+                                 daily_time_weighted_aggregate=.1,mlr_scalar_replay=.1)
+                             for init in pair for w in ('Stage-I','Total') for m in range(51)])
+        daily.to_csv(run/'table_ncvi_concurrent_daily_members.csv',index=False)
+        replay.to_csv(run/'table_ncvi_daily_stage_replay_qc.csv',index=False)
+        manifest=dict(status='FAIL_STAGE_EQUIVALENCE',s2s_daily_source_qc={'status':'PASS'},
+                      s2s_stage_replay_qc={'status':'FAIL'},
+                      outputs={p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in run.iterdir()})
+        (run/'ncvi_daily_export_manifest.json').write_text(json.dumps(manifest))
+    env=dict(pd=pd,np=np,Path=Path,json=json,NCVI_RUNS=tuple(runs),NCVI_RUN=runs[0],
+             INITS=('2023-06-08','2023-06-12','2023-06-01','2023-06-05'),KEY=['init_date','date','member'],
+             finite=lambda x,msg:np.asarray(x,float),sha256=lambda p:hashlib.sha256(Path(p).read_bytes()).hexdigest())
+    before={str(p):p.read_bytes() for run in runs for p in run.iterdir()}
+    exec(compile(branch,'actual-multi-export-loader','exec'),env)
+    assert len(env['ncvi'])==2244 and len(env['rq'])==408
+    assert env['nm']['status']=='FAIL_STAGE_EQUIVALENCE'
+    assert len(env['ncvi_manifests'])==2
+    assert before=={str(p):p.read_bytes() for run in runs for p in run.iterdir()}
+    env['NCVI_RUNS']=(runs[0],)
+    with pytest.raises(ValueError,match='coverage'):exec(compile(branch,'missing-early','exec'),env)
+    env['NCVI_RUNS']=(runs[0],runs[1],runs[1])
+    with pytest.raises(ValueError,match='coverage'):exec(compile(branch,'duplicate-early','exec'),env)

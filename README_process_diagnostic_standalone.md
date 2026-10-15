@@ -1,96 +1,78 @@
-# Preliminary Fig.5 / Fig.11 — manual HPC Jupyter execution
+# Standalone Fig.5 / Fig.11 / Fig.S11 diagnostic workflow
 
-Copy the SIX complete code cells of `process_fig5_fig11_diagnostic_standalone.ipynb` into HPC Jupyter and execute in order. All functions are embedded; no custom Python modules, Git or CLI is required. Scientific packages numpy/pandas/matplotlib and existing source CSVs are required. Edit paths only in Cell1; choose a fresh output directory outside NCVI run_001.
+`process_fig5_fig11_diagnostic_standalone.ipynb` is a self-contained six-cell HPC workflow. It reads existing member-daily CSVs and saved model tables; it does not refit MLR, scalers, residualization, LMG, Johnson or LOFO. Run all six cells in order with a **new** output directory. The notebook in GitHub is intentionally unexecuted; real figures require HPC inputs.
 
-1. Configure v12 daily raw/TCC/Tmax and stage tables, five stored model tables plus their input provenance manifest, NCVI run_001 and optional legacy ERA5 physical reference CSV. Existing comparison/NCVI manifests are scientific inputs, not external configuration. ERA5_PHYSICAL=None explicitly omits all ERA5; otherwise missing or incomplete configured reference aborts. NCVI ERA5 is always excluded. Unit definitions remain v12 source conventions; CSV agreement checks do not independently validate GRIB unit attributes.
-2. Verify model/source hashes, exact 2×11×51 coverage, unchanged physical stage aggregation (1224 comparisons), frozen saved-model provenance and v12 rank groups. No legacy S2S group curves are reused.
-3. Verify all run_001 manifest output hashes and S2S source PASS, exact daily anomaly keys/units and daily-internal replay. Current historical FAIL is allowed exclusively by this user-authorized diagnostic route, copied to the new manifest and not edited. NCVI groups use 17 original members each. Optional ERA5 physical values are read independently from era5 column; s2s_all_mean never substitutes Middle17. This reference retains its original processing convention and is not promoted to a newly verified physical source.
-4. Replay saved full models and compute frozen Stage-I SM–SHF partial fits for both versions, including day18 out-of-window. Other predictors remain at saved training means. Physical factor values are copied identically across versions. No fitting or importance calculation.
-5. Draw Fig5 Total (5×2) and Fig11 Stage-I raw/residualized (6×2), left06-08/right06-12. Colors black/red/blue/green for ERA5/Hot17/Middle17/Cold17; common row y-ranges, equal axes boxes, centralized legend, fixed width6.5in. Stage-I boundary06-18 00:00 BJT and shaded day18. All figures explicitly PRELIMINARY/DIAGNOSTIC, with NCVI historical FAIL/ERA5-unverified annotation. True renderer text collision and clipping QC must pass; it is not bypassed. Inspect plotted NCVI curves and physical-variable relationships manually after the actual HPC run.
-6. Recheck input/run_001 hashes, export new tables/QC/manifest, PNG600dpi and editable vector PDF. No formal acceptance is claimed. Missing provenance, scientific FAIL or unrun verification are preserved distinctly from diagnostic layout PASS. Original run_001 files are never changed.
+## Current figure selection
 
-Products in new output directory:
+- **Fig.5 Total:** 8 June left / 12 June right, 14–24 June daily evolution, using each initialization's Total Hot17/Middle17/Cold17 membership.
+- **Fig.11:** residualized model only; retain 8/12 June and add **1 June left / 5 June right**, each as a separate 6×2 process figure. Rows are SM–SHF partial fitted Tmax, SM, Z500 anomaly, SHF, NCVI anomaly and Total cloud cover. Display dates remain 14–18 June. The saved training/grouping window is 14–17 June; 18 June remains a frozen-parameter projection outside that window.
+- **Fig.S11 land:** same two date pairs, each 2×2, top Tmax–SM / bottom Tmax–SM–SHF partial fitted diagnostic.
+- **Fig.S11 circulation:** same date pairs, each 2×2, top **Tmax–Z500 anomaly** / bottom **Tmax–NCVI anomaly**. The new 1/5 June figure has 1 June in the left column and 5 June in the right. These are 51-member **14–17 June scalars**, not group means or daily points. NCVI scalars are taken directly from the saved model design, not from an unverified daily aggregate.
 
-- Fig5_Total_DIAGNOSTIC.png/.pdf
-- Fig11_StageI_raw_DIAGNOSTIC.png/.pdf
-- Fig11_StageI_residualized_DIAGNOSTIC.png/.pdf
-- table_fig5_total_DIAGNOSTIC.csv, table_fig11_stageI_DIAGNOSTIC.csv
-- v12_daily_stage_qc.csv, current_groups.csv, partial_fitted_audit.csv, layout_qc.csv
-- executed_cells.json and diagnostic_process_manifest.json (formal_process_allowed=false, immutable original status/hashes)
+All scatter y labels read `6.14–17 Tmax (°C)`. Statistics show Pearson r, descriptive R²=r² and n=51; this R² is not full-model R². Stats boxes are at the upper right except the existing partial fitted row, which retains its upper-left box. Colors, markers and line styles are unchanged. Raw model figure/plot-table outputs are disabled.
 
-Methods distinctions are preserved: v12 Tmax arithmetic spatial average, TCC source date convention represents08:00–08:00 BJT, Stage-I day18 is out-of-training projection. Partial-fit differences reflect parameterization sensitivity. Nothing redefines members or changes MLR results. FigS11 existing inputs/outputs are not touched.
+The early-date pairs are exploratory: **no final scientific comparison pair has been selected**. To subsequently compare 5 vs 8 June or 5 vs 12 June, add that tuple to `EARLY_PAIRS` in Cell 1 and rerun in another new output directory. `TOTAL_INITS` remains 8/12 June. No pair is selected based on maximum temperature separation.
 
-Current HPC evidence is user-reported: source PASS,1122 daily NCVI rows,204 stage comparisons, internal agreement about1e-16, archived-model difference4.748331733361866e-08 and strict1e-8 FAIL, ERA5 provenance incomplete. Cloud lacks run_001 so real curves/PDFs are not generated here. Cloud tests use synthetic series to check the six-cell independence, axes counts/width/alignment, renderer text extents and stage boundary; they are not scientific validation. Return Cell2–6 logs, new plotting CSVs, manifest and PNG/PDF after running on HPC.
+## Required NCVI daily exports for the added dates
 
-## Updated Fig.5 / Fig.11 / Fig.S11 organization
+The old exporter was configured for 8/12 June. Those two dates cannot supply daily curves for 1/5 June. Cell 1 now explicitly uses two immutable source directories:
 
-The same complete six-cell Notebook now generates all five figures. FigS11 raw and residualized are each2×2, columns06-08/06-12 and rows Tmax–raw SM / Tmax–version-specific partial fit. Both member diagnostics are independently recomputed with each saved full model; Tmax and raw SM are asserted identical across versions. Physical Fig11 series are also asserted identical. No MLR fitting occurs.
+```python
+NCVI_RUN = V12 / 'ncvi_daily_standalone/run_001'
+NCVI_EARLY_RUN = V12 / 'ncvi_daily_standalone/run_early_0601_0605'
+NCVI_RUNS = (NCVI_RUN, NCVI_EARLY_RUN)
+```
 
-Cell4 writes FIVE dedicated plot CSVs into a fresh output directory:
+If the early export does not already exist, run the prepared **`ncvi_daily_export_early_0601_0605.ipynb`** first. It copies the existing exporter's algorithms unchanged and changes only Cell 1 to:
 
-- fig5_total_timeseries_plot.csv
-- fig11_stageI_timeseries_raw_plot.csv
-- fig11_stageI_timeseries_residualized_plot.csv
-- figS11_stageI_scatter_raw.csv
-- figS11_stageI_scatter_residualized.csv
+```python
+INITS = ('2023-06-01', '2023-06-05')
+OUTPUT_ROOT = V12 / 'ncvi_daily_standalone/run_early_0601_0605'
+```
 
-Cell5 verifies hashes and reads those files back before rendering. Plotting does not depend on old Notebook objects. Cell6 adds group_membership_audit.csv, layout_qc.csv, partial_fitted_audit.csv and consistency_manifest.json, including original NCVI manifest/FAIL and explicit formal_process_allowed=false. Existing output directories/files cannot be overwritten. If Cell4 succeeds but a later cell fails, fix/retry the later cell without rerunning Cell4 or choose a new directory and restart the entire workflow.
+Run that exporter’s six cells first. Its Cells 2–6 are byte-for-byte identical to the existing export notebook. Its two-date coverage checks and algorithms already support this pair. It reads the corresponding pinned realtime/reforecast sources; it does not refit models or recalculate ERA5. The directory must be new. If the export is already available elsewhere, configure its actual directory instead. The process notebook validates the export hashes, source PASS, exact date/member coverage, no overlap between exports, and daily internal replay. It fails explicitly on missing dates; it never interpolates, substitutes stage scalars for daily data, or fabricates curves. A missing early daily source means HPC validation is pending, not that its curves have been generated.
 
-Figure faces no longer contain PRELIMINARY/DIAGNOSTIC watermark text. Diagnostic status stays in figure filenames (_DIAGNOSTIC), this caption note and the manifest. ERA5 NCVI remains omitted pending provenance. PNG/PDF sizes, colors, row/common ranges, renderer QC and day18 shading remain unchanged. Two additional filenames: FigS11_StageI_raw_DIAGNOSTIC and FigS11_StageI_residualized_DIAGNOSTIC.
+The historical `FAIL_STAGE_EQUIVALENCE` and ERA5 provenance limitations remain intact. New source manifests are recorded separately. Rendering does not promote any scientific FAIL/PENDING status to PASS.
 
-Caption draft: Curves show the current v12 stage-ranked groups; physical series are unchanged across raw/residualized models. The SM–SHF partial fitted Tmax diagnostic uses each full model's intercept, standardized coefficients and training scalers, holding all other predictors at training means. Daily residualized heat flux is projected with frozen Stage-I residualization parameters. June18 is outside the14–17 training window. Scatter first-row Tmax/raw SM is identical across versions. Diagnostic outputs retain unresolved historical NCVI strict replay and ERA5 provenance status; they are not formal paper acceptance.
+## Fig.5 axes and cloud-cover units
 
-This updated subsection supersedes the older product names and figure-watermark description above.
+Requested ascending bounds and tick steps are:
 
-## Final plotting polish (baseline90b4982)
+| Factor | Preferred y range | Step |
+| --- | --- | --- |
+| Z500 anomaly | −50 to 100 gpm | 25 |
+| TP | −1 to 10 mm day⁻¹ | 1 |
+| NCVI anomaly | −0.30 to 0.25 PVU | 0.05 |
+| Total cloud cover | 0 to 100% | 25 |
 
-All calculation cells and five plot CSV definitions remain unchanged. Scatter descriptive statistics use all51 individual member pairs for each initialization/version, regardless of colored groups. The annotation is Pearson r, descriptive R²=r² and n51; a simple least-squares line is drawn. This r² is NOT the full six-predictor MLR R². Statistics and line coefficients are saved in scatter_descriptive_statistics.csv. No scientific model is fitted/refitted.
+Each row pools the **displayed pair** and all plotted groups including ERA5. Before plotting, every central value and any supplied uncertainty bounds are checked. Bounds expand outward on the specified tick grid when necessary. If an expanded range makes numeric labels collide, label density is reduced while every tick position is retained; the stride is recorded in QC. The default target ranges retain every label. TP keeps −1 as bottom whitespace but suppresses negative ticks if all data/bands are nonnegative. The existing day18 shading denotes time outside the training window; it is not a vertical uncertainty band. Optional vertical bands use `value_lower` / `value_upper` in the same source units as `value`, and are validated, converted and drawn together. No bands are invented if those columns are absent.
 
-Top headers show the two initialization dates once; panels use concise letters. Time-series date labels appear only on the bottom row to reduce repetition. Shared variable scales remain; scatter row scales now pool both initialization columns and both versions. Physical width6.5in; heights9.0in(Total),10.5in(Stage-I),5.9in(scatter). Base/tick typography9pt, labels8pt, headers10pt and descriptive annotations8pt. Source values/groups and date windows do not change. Day18 shading and frozen projection boundary remain.
+Cloud cover is converted on a **plotting copy only**, separately for S2S and ERA5. `TCC_SOURCE_UNITS` accepts `auto`, `fraction` or `percent`. Auto detects [0,1] vs [0,100] by range; values already in percent are not multiplied again. A percentage sample entirely at or below 1 is inherently ambiguous, so use an explicit `percent` override when source metadata says so. The source-unit inference/override and multiplier are saved in QC. Source CSVs, saved training scales and coefficients retain their original units and values. Invalid/nonfinite values fail.
 
-Visual encoding: ERA5 black circle/solid; Hot17 red upright triangle/solid; Middle17 blue square/dashed; Cold17 green downward triangle/dotted. Single legend per figure. PDF uses embedded TrueType; SVG uses editable text; PNG remains600dpi. Renderer collision/cropping/equal-box QC is mandatory. If PyMuPDF is available, Cell6 also reads each actual PDF, verifies6.5in physical width and text clipping/editable spans and records actual font sizes in pdf_font_qc.csv. Without it, PDF audit is explicitly NOT_RUN, never assumed PASS. Install PyMuPDF in the HPC environment if that additional actual PDF check is desired; synthetic/cloud QA does not validate genuine HPC plots.
+Date markers use the exact daily datetime nodes and ticks. Fig.5 labels every day 06-14 through 06-24 at 70° on its bottom row; Fig.11 labels 06-14 through 06-18. There is no half-day marker offset.
 
-The manifest now identifies90b4982 as the reviewed baseline (not HPC HEAD) and captures the actual six-cell code text SHA256; the snapshot is the authoritative execution version. History statuses and formal_process_allowed=false are preserved. SVG is additional output. No large diagnostic watermark appears on figures.
+## Cells, outputs and validation
 
-## AGU/JGR export size repair (source205c4b8)
+1. Configure actual input paths, comparison pairs, cloud-cover units and a new output directory.
+2. Verify source hashes, 51-member coverage, original descending Tmax ranking/groups, daily-to-stage values and saved models.
+3. Load and validate existing daily NCVI exports and independent ERA5 references.
+4. Reuse saved residualized intercept, coefficients, training means/scales and SHF residual relation for partial fitted diagnostics. Export three consolidated plot tables:
+   - `fig5_total_timeseries_plot.csv` (8/12 June only)
+   - `fig11_stageI_timeseries_residualized_plot.csv` (all configured early dates)
+   - `figS11_stageI_scatter_residualized.csv` (all configured early dates, including Z500/NCVI scalars)
+5. Draw the seven default figures and enforce renderer text collision/clipping, matched panel dimensions, exact daily ticks/markers, and curve/band range checks.
+6. Export **600-dpi PNG, vector PDF and SVG**, immutable executed-code snapshots, input/output hashes, source manifests and independent audit tables. Recheck all inputs and both NCVI directories for mutation. PDF font/size/clipping QC remains mandatory where PyMuPDF is available; missing PyMuPDF is explicitly NOT_RUN.
 
-Only Cell5–6 change in this repair. Figure physical dimensions: Fig5 165.1×218.44mm (6.5×8.6in); Fig11 each165.1×226.06mm (6.5×8.9in); FigS11 each165.1×149.86mm (6.5×5.9in). All within requested170×228mm maximum. Fonts are preserved, not scaled with canvas; full-size renderer clipping/collision/equal-axis tests rerun on shorter canvases.
+Additional QC includes `axis_range_qc.csv`, `tcc_display_units_qc.csv`, `scatter_descriptive_statistics.csv`, `layout_qc.csv` and `pdf_font_qc.csv`. Figure filenames include both date columns, factor family and residualized version. Fresh output directories prevent overwriting old figures/tables. Old repository scripts and audit results are not modified.
 
-Actual PDF QC verifies maximum width/height AND exact intended canvas, editable text and clipping. Readability criteria require ordinary spans>=8pt and PDF-flagged superscript/subscript spans>=5.5pt, recorded separately. These explicit workflow criteria are not represented as an AGU-mandated minimum. Unflagged Unicode superscripts embedded in ordinary labels remain ordinary spans. Undersized fonts/oversized pages produce FAIL with reasons, saved in pdf_font_qc.csv/manifest, then stop acceptance; PyMuPDF missing remains NOT_RUN. Renderer QA is not actual PDF QA. All export formats PDF/SVG/PNG600 remain, with no overwrite of existing SVG or other outputs.
+## ERA5 and methods distinctions
 
-Manifest notebook_source_commit=205c4b8 identifies the actual source before this repair; historical_reference_baseline=90b4982 is separate. Neither is HPC HEAD; execution_git_head remains null. Exact repaired code is identified by executed_code_sha256 and executed_cells.json. Calculations, five plot-table definitions, original NCVI FAIL and ERA5 exclusion are unchanged.
+The mandatory independent ERA5 320-K NCVI daily anomaly source is:
 
+```text
+/data1/huangy/fig6/NC/MSE/ERA5/NCVI_theta320/processed/era5_ncvi_theta320_daily_anomaly_2023.csv
+```
 
-## ERA5 theta=320 K NCVI observational reference (diagnostic-only)
+Configured columns are `date` and `ncvi_theta320_anom_pvu`; absolute/climatological PV is never silently substituted. The reader requires exactly 14–24 June, one finite daily value per day, and PVU. The same reference appears under each initialization. Optional `ERA5_PHYSICAL` supplies other variables; `None` omits only those other lines. ERA5 NCVI remains mandatory.
 
-The 2023-06-14–24 ERA5 NCVI line is restored in Fig.5 and Fig.11 from the **independent existing HPC CSV**:
-`/data1/huangy/fig6/NC/MSE/ERA5/NCVI_theta320/processed/era5_ncvi_theta320_daily_anomaly_2023.csv`.
-
-Cell1 configures `ERA5_NCVI_CSV` and optional exact `ERA5_NCVI_DATE_COL` /
-`ERA5_NCVI_VALUE_COL`. Their default `None` values permit ONLY strict, unambiguous
-selection from documented candidate *names*, never a heuristic selection by value or magnitude.
-Because the CSV header has not been viewed in this cloud session, run Cell1–3 in HPC and
-set the **actual CSV column names** if Cell3 reports ambiguous or missing columns;
-do not invent columns or reinterpret an absolute PV field as an anomaly. Inspect original
-source files to verify PVU, the baseline climatology and BJT day-label provenance.
-A CSV `units`/`unit` field, if present, is required to equal `PVU`; absent
-metadata is explicitly flagged as *configuration-only, independently unverified*.
-
-Cell3 validates 11 distinct BJT daily labels (14–24 Jun), finite anomaly values, source
-SHA256 and unique composite keys; duplicates/missing rows are fatal. The same observed
-11-day series is repeated only as the ERA5 comparison curve for both 06-08 and 06-12
-initializations; Stage-I shows 14–18 Jun, with 18 Jun outside the Stage-I training window.
-The raw/residualized model predictors and S2S member values are untouched, and Cell4
-continues to exclude ERA5 from all MLR-based partial-fit calculations. Cell5 requires
-the NCVI ERA5 curve (black) in both columns. The 5 existing plotting CSV *filenames*
-are retained, but their Fig.5/11 content now includes newly appended ERA5 NCVI rows;
-the Fig.S11 member-only tables are unchanged. Cell6 emits source/path/hash/schema
-metadata and `PLOTTED_PROVENANCE_PENDING`; historical strict S2S replay FAIL is
-preserved, not upgraded to PASS. ERA5 cosine-latitude weighted spatial mean and S2S
-arithmetic spatial mean must NOT be represented as identical. A plotted observational
-curve is not scientific provenance acceptance.
-
-**HPC rerun:** select a NEW `OUTPUT` directory, then run all six complete Cells in
-order. If the CSV date/value columns cannot be resolved automatically, enter exact
-real names in Cell1 and rerun from a fresh kernel/new output. Do not overwrite any
-older process plots or immutable NCVI run_001 data.
+ERA5 NCVI uses cos(latitude) weighting according to the earlier method, whereas the S2S source uses arithmetic spatial averaging. Independent ERA5 climatology/unit/time/region provenance remains `PLOTTED_PROVENANCE_PENDING`. TCC source labels retain their original 08:00–08:00 BJT interval convention; they are not silently relabeled. All outputs remain `PRELIMINARY_DIAGNOSTIC`, `formal_process_allowed=False` until the scientific issues are resolved.
