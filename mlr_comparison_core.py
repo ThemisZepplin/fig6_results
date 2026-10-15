@@ -325,6 +325,27 @@ def importance(models, permutations):
     return pd.DataFrame(rows), pd.DataFrame(qc)
 
 
+def lofo_original_delta_r2_table(results):
+    """Official non-normalized LOFO diagnostics; legacy percentage stays audit-only."""
+    im = results['importance']
+    summary = results['summary']
+    q = im[(im.method == 'LOFO') & (im.version == 'residualized')].copy()
+    if len(q) != len(INITS)*len(WINDOWS)*6:
+        raise ValueError('Incomplete residualized LOFO deletion matrix')
+    summary = summary[summary.version == 'residualized'][['init_date','window','R2','n']]
+    q = q.merge(summary,on=['init_date','window'],validate='many_to_one')
+    if not q['n'].eq(51).all():
+        raise ValueError('LOFO must use same 51 member samples')
+    if not np.isfinite(q[['R2','R2_without_factor','raw_value']].to_numpy(float)).all():
+        raise ValueError('Nonfinite LOFO R2 values')
+    if not np.allclose(q.raw_value, q.R2-q.R2_without_factor,rtol=0,atol=1e-8):
+        raise ValueError('LOFO delta R2 is not full minus deleted R2')
+    if (q.raw_value < -1e-8).any():
+        raise ValueError('Deleting a predictor improved in-sample nested OLS R2')
+    result = q[['init_date','window','predictor','position','n','R2','R2_without_factor','raw_value']].copy()
+    return result.rename(columns={'R2':'R2_full','raw_value':'lofo_delta_r2'})
+
+
 def assemble_results(groups, models, imp, model_qc, residual_audit):
     summary, coefficients, fitted, design_rows, equivalence = [], [], [], [], []
     for (init, w, v), m in models.items():
@@ -513,6 +534,9 @@ def save_results(results, history_qc, input_root, output_root, provenance, permu
     status = qc_status(results, history_qc)
     for key, name in TABLE_FILES.items():
         results[key].to_csv(out / 'tables' / name, index=False)
+    lofo_table=lofo_original_delta_r2_table(results)
+    lofo_filename='table_mlr_lofo_original_delta_r2_residualized.csv'
+    lofo_table.to_csv(out / 'tables' / lofo_filename,index=False)
     history_qc.to_csv(out / 'qc/table_mlr_historical_reproduction.csv', index=False)
     pd.DataFrame(permutations, columns=[f'position_{i}' for i in range(1, 7)]).to_csv(
         out / 'qc/lmg_permutations_seed42_2000.csv', index=False)
@@ -525,7 +549,10 @@ def save_results(results, history_qc, input_root, output_root, provenance, permu
                 'versions_used': {'python': platform.python_version(), 'numpy': np.__version__,
                                   'pandas': pd.__version__, 'scipy': scipy.__version__,
                                   'sklearn': sklearn.__version__, 'statsmodels': statsmodels.__version__},
-                'table_sha256': {name: _digest(out / 'tables' / name) for name in TABLE_FILES.values()}}
+                'table_sha256': {**{name: _digest(out / 'tables' / name) for name in TABLE_FILES.values()},
+                                 lofo_filename:_digest(out / 'tables' / lofo_filename)},
+                'lofo_display_metric':'Original full minus reduced in-sample R2; no percentage normalization',
+                'lofo_pct_column_role':'Legacy comparison/history audit only, not used in paper figures'}
     (out / 'qc/comparison_manifest.json').write_text(json.dumps(manifest, indent=2), encoding='utf-8')
     if status['computational_status'] != 'PASS':
         warnings.warn('Results saved for audit, but QC failed/importance undefined. Figure export is blocked; inspect QC CSVs.', stacklevel=2)
