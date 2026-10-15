@@ -1,68 +1,13 @@
-# English caption drafts
+# Updated manuscript captions — residualized-only MLR figures
 
-Each figure number has separate raw and residualized versions with the indicated
-filename suffix. These drafts describe definitions, not scientific conclusions.
+These drafts supersede the historical raw/residualized and normalized-LOFO descriptions carried by PR #12. All dates below are inclusive Beijing-time days. Figures do not represent out-of-sample predictive skill, direct causal effects, or observational forecast errors.
 
-**Figure 3 — Total-period member regression.** Window-mean absolute North China
-daily maximum 2-m temperature (Tmax, °C) for 14–24 June 2023 (inclusive, BJT)
-from each of 51 ECMWF ensemble members versus its MLR fitted value. Panels (a–d)
-show initializations on 1, 5, 8 and 12 June. The raw version uses the six original
-predictor columns; the residualized version substitutes residual TCC and SM after
-separate intercept regressions against TP while retaining TP in the full model.
-Trend lines, Pearson r, R² and slope are **in-sample member-regression diagnostics**,
-not independent predictive validation or forecast skill against ERA5. Corresponding
-raw and residualized panels use identical axes. All models include an intercept
-and independently standardized predictors; Tmax is not standardized.
+**Figure 3. Total-period ensemble-member MLR fit (14–24 June 2023).** The horizontal axis is ECMWF ensemble-member mean Tmax (°C); the vertical axis is the corresponding fitted Tmax from the residualized six-predictor MLR (°C). Panels (a–d) represent initialization dates 1, 5, 8, and 12 June 2023. Each regression uses 51 members, an intercept, predictor standardization and the same period-specific residualization design. Insets report the model in-sample coefficient of determination (R²) and the slope of the descriptive fitted-versus-original Tmax line; no Pearson r is annotated.
 
-**Figure 4 — Total-period relative importance and supplementary diagnostics.**
-LMG (top row, green), Johnson relative weights (middle row, blue), and normalized
-positive LOFO ΔR² (bottom row, orange) for the 51-member regressions in Figure 3
-(14–24 June 2023, inclusive BJT). Columns show 1, 5, 8 and 12 June initializations.
-LMG is the primary relative-importance indicator: averaged positive incremental
-R² over 2000 variable-entry permutations (seed42), normalized to 100%. Johnson
-percentages normalize the original relative weights; their unnormalized sum is
-checked against full-model R². LOFO deletes one fixed full-model column at a time
-and normalizes positive full-minus-reduced R² across factors. LOFO percentages
-are not LMG contributions; the three percentage definitions are not equivalent
-variance decompositions. Johnson and LOFO provide supplementary robustness
-diagnostics. For each window, predictor positions are fixed according to the descending LMG importance in the 12 June 2023 residualized model and retained across all initialization dates, methods, and raw/residualized counterparts.
-The Total order is TP, Z500, NCVI, TCC resid, Init MSE*, SM resid; raw counterparts
-retain these positions. Factor names appear in the first column of each row only.
-Exact one-decimal percentages replace x-axis ticks; common internal method scales
-remain unchanged. Bold labels are visual emphasis, not significance.
-Raw versus residualized labels distinguish original SM/TCC from SM resid/TCC resid.
-TP is window-accumulated North China precipitation; SM is mean soil moisture;
-TCC is mean total cloud cover; Z500 is the North China 500-hPa geopotential-height
-anomaly; NCVI is the stage-concurrent cold-vortex diagnostic; Init MSE* denotes
-Initial_MSEstar_max_NCHN (antecedent thermodynamic predictor). Regression
-associations are not interpreted as causal contributions.
+**Figure 4. Relative importance and deletion sensitivity during the total period.** Four columns show forecast initializations on 1, 5, 8 and 12 June 2023. The top two rows show LMG relative importance and Johnson relative weights, respectively, normalized separately to sum to 100% within each regression. The bottom row shows original leave-one-factor-out (LOFO) reduction in model fit, `ΔR²_k = R²_full − R²_−k`, when predictor `k` is excluded and the remaining standardized predictors are refitted using the same 51 members. The LOFO values are **not normalized to 100%**, and the LOFO row uses a different numerical x-axis scale (R² reduction, ΔR²) from the percentage rows. A larger ΔR² reflects greater in-sample deletion sensitivity; LOFO is not an additive explained-variance decomposition. All panels use residualized predictors, and each predictor retains a fixed vertical position across methods and initializations. Axes display numerical tick marks alongside value labels.
 
-**Figure 9 — Stage-I member regression.** As in Figure 3, for 14–17 June 2023
-(inclusive, BJT) and all 51 ECMWF members per initialization. The response is
-window-mean absolute North China daily Tmax (°C). Panels (a–d) correspond to
-1, 5, 8 and 12 June. Raw predictors retain SHF and TCC; the residualized version
-replaces them by SHF resid and TCC resid from separate intercept regressions
-against SM, while retaining SM in the full model. Other predictor positions are
-unchanged. The fitted trend and r/R²/slope describe in-sample member regression
-only; they are not independent predictive performance or ERA5 forecast skill.
-Corresponding raw/residualized panels share limits and ticks.
+**Figure 9. Ensemble-member MLR fit for 14–17 June 2023.** As Figure 3, but for the earlier 14–17 June window. The horizontal axis shows original ECMWF member Tmax (°C), and the vertical axis shows MLR predicted Tmax (°C) from the residualized predictor specification. The four panels show initialization dates 1, 5, 8 and 12 June. Insets show in-sample model R² and descriptive slope, without Pearson r.
 
-**Figure 10 — Stage-I relative importance and supplementary diagnostics.**
-As in Figure 4 for Stage-I (14–17 June 2023, inclusive BJT), with 51 ECMWF
-members, window-mean absolute Tmax as response, and initializations on 1, 5, 8
-and 12 June. Rows display LMG (primary indicator, green), Johnson relative weights
-(blue) and normalized positive LOFO ΔR² (orange). Raw and residualized versions
-use the same predictor positions.
-For each window, predictor positions are fixed according to the descending LMG importance in the 12 June 2023 residualized model and retained across all initialization dates, methods, and raw/residualized counterparts.
-The Stage-I order is SHF resid, SM, Z500, Init MSE*, NCVI, TCC resid; raw SHF/TCC
-names replace residualized labels at the same positions. Factor labels appear only
-in the first column of each row; percentage annotations replace x-axis ticks while
-preserving the common method scales.
-SHF denotes window-mean sensible heat flux; SHF resid and TCC resid are the
-parts remaining after intercept regression on SM. Remaining abbreviations follow
-Figure 4. LMG averages positive incremental R² across the common 2000-permutation
-sequence; Johnson normalizes its relative weights; LOFO normalizes positive R²
-losses after deletion of fixed columns. These percentages have distinct meanings,
-and positive-normalized LOFO ΔR² is not a LMG contribution. Johnson and LOFO are
-supplementary diagnostics; bold labels are visual emphasis only. No causal
-interpretation, significance claim or preferred model representation is implied.
+**Figure 10. Relative importance and deletion sensitivity for 14–17 June 2023.** As Figure 4, except for the 14–17 June window and its corresponding residualized predictors. LMG and Johnson display relative shares (%), while LOFO displays original single-predictor deletion losses in model R², without positive-loss percentage normalization. Four columns correspond to the four forecast initialization dates; fixed predictor positions and method-specific common scales allow comparisons across initialization dates.
+
+**Numbering note.** This file records the *previous* Figure 3/4/9/10 numbering requested for the ongoing isolated MLR code revision. Per the 14 October supervisor meeting, earlier Figure 9 and 10 may eventually be renamed Figure 8 and 9 in the integrated manuscript. Figure renumbering should be applied consistently only after the complete manuscript figure sequence is frozen.
