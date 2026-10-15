@@ -119,3 +119,39 @@ def test_reference_ranking_violation_rejected(fixture):
     copied["importance"].loc[mask,"importance_pct"]=[1,2,3,4,5,85]
     with pytest.raises(ValueError,match="12 June residualized LMG order mismatch"):
         plot.figure_plan(copied)
+
+
+def test_legacy_manifest_with_no_extra_lofo_csv_is_supported(fixture, tmp_path):
+    """Reproduce uploaded v13 manifest: 11 table SHA entries, no derived LOFO CSV."""
+    import shutil
+    inp, out, _, _ = fixture
+    legacy = tmp_path / "legacy_v13"
+    shutil.copytree(out, legacy)
+    target = legacy / "tables/table_mlr_lofo_original_delta_r2_residualized.csv"
+    target.unlink()
+    marker = legacy / "qc/comparison_manifest.json"
+    manifest = json.loads(marker.read_text())
+    manifest["table_sha256"].pop(target.name)
+    marker.write_text(json.dumps(manifest))
+    data, audit = plot.load_results(legacy)
+    assert audit["lofo_plot_input_audit_mode"] == "LEGACY_HASHED_IMPORTANCE_AND_REDUCED_R2"
+    assert len(data["importance"]) == 288
+    assert plot.figure_plan(data)["bars"]["LOFO"] < 1
+
+
+def test_legacy_lofo_source_tampering_is_rejected(fixture, tmp_path):
+    import shutil
+    _, out, _, _ = fixture
+    legacy = tmp_path / "legacy_corrupted"
+    shutil.copytree(out, legacy)
+    target = legacy / "tables/table_mlr_lofo_original_delta_r2_residualized.csv"
+    target.unlink()
+    marker = legacy / "qc/comparison_manifest.json"
+    manifest = json.loads(marker.read_text())
+    manifest["table_sha256"].pop(target.name)
+    marker.write_text(json.dumps(manifest))
+    source = legacy / "tables/table_mlr_importance_long.csv"
+    txt = source.read_text()
+    source.write_text(txt.replace("LOFO", "LOOO", 1))
+    with pytest.raises(ValueError, match="Table changed"):
+        plot.load_results(legacy)
