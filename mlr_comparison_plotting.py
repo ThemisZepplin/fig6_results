@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.patheffects as patheffects
+from matplotlib.text import Text
 from matplotlib.ticker import MaxNLocator, MultipleLocator
 
 from mlr_comparison_core import (INITS, WINDOWS, VERSIONS, METHODS, LABELS,
@@ -25,8 +26,30 @@ STYLE = {"font.family": "sans-serif", "font.sans-serif": ["Arial", "DejaVu Sans"
 FIGURE_IDS = {"Total": (3, 4, "Total"), "Stage-I": (9, 10, "June14_17")}
 FIGURE_VERSION = "residualized"
 FIGURE_REVISION = "lofo_deltaR2_v1"
-IMPORTANCE_REVISION = "lofo_deltaR2_v3"  # Inside-label 0.6 pt halo only; Fig3/9 preserve v1
+IMPORTANCE_REVISION = "lofo_deltaR2_v4"  # Preserve PDF text extraction under halo; Fig3/9 preserve v1
 INSIDE_LABEL_HALO_PT = 0.6
+
+
+class ExtractableHaloText(Text):
+    """Render a white glyph halo first, then native editable PDF text on top.
+
+    Matplotlib path effects applied to a single text pass outline its glyphs
+    as vector paths; PDF text extractors then miss the affected value labels.
+    The SECOND draw has no path effects and preserves searchable/editable text.
+    Only one artist lives in ax.texts, so positioning/collision QC is unchanged.
+    """
+    def draw(self, renderer):
+        effects = self.get_path_effects()
+        if not effects:
+            return super().draw(renderer)
+        try:
+            super().draw(renderer)  # underlay: vector-path halo
+            self.set_path_effects([])
+            super().draw(renderer)  # foreground: native PDF text
+        finally:
+            self.set_path_effects(effects)
+
+
 IMPORTANCE_REFERENCE_ORDER = {
     'Total': ('NCHN_tp', 'z500_anom_NCHN', 'NCVI_concurrent', 'TCC_resid',
               'Initial_MSEstar_max_NCHN', 'SM_resid'),
@@ -273,8 +296,9 @@ def importance_figure(data, plan, window, version):
                 # Preserve positive sub-0.0005 values instead of rounding to 0.000.
                 label = (('<0.001' if 0 < v < 0.0005 else f'{v:.3f}')
                          if method == 'LOFO' else f'{v:.1f}%')
-                t = ax.text(v, y, label, va='center', ha='left', color='black',
-                            fontweight='bold', fontsize=8.0)
+                t = ExtractableHaloText(v, y, label, va='center', ha='left',
+                                        color='black', fontweight='bold', fontsize=8.0)
+                ax.add_artist(t)
                 value_texts.append((ax, t, float(v), y))
             axes.append(ax)
     fig.canvas.draw()
