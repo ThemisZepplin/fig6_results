@@ -9,3 +9,4 @@ pytest>=7
 nbclient>=0.9
 ipykernel>=6
 # Jupyter Notebook/JupyterLab provides the HPC user interface.
+pymupdf>=1.23
