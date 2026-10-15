@@ -8,6 +8,7 @@ import struct
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+import matplotlib.patheffects as patheffects
 from matplotlib.ticker import MaxNLocator, MultipleLocator
 
 from mlr_comparison_core import (INITS, WINDOWS, VERSIONS, METHODS, LABELS,
@@ -24,7 +25,8 @@ STYLE = {"font.family": "sans-serif", "font.sans-serif": ["Arial", "DejaVu Sans"
 FIGURE_IDS = {"Total": (3, 4, "Total"), "Stage-I": (9, 10, "June14_17")}
 FIGURE_VERSION = "residualized"
 FIGURE_REVISION = "lofo_deltaR2_v1"
-IMPORTANCE_REVISION = "lofo_deltaR2_v2"  # Style-only; Fig3/9 preserve v1
+IMPORTANCE_REVISION = "lofo_deltaR2_v3"  # Inside-label 0.6 pt halo only; Fig3/9 preserve v1
+INSIDE_LABEL_HALO_PT = 0.6
 IMPORTANCE_REFERENCE_ORDER = {
     'Total': ('NCHN_tp', 'z500_anom_NCHN', 'NCVI_concurrent', 'TCC_resid',
               'Initial_MSEstar_max_NCHN', 'SM_resid'),
@@ -299,6 +301,10 @@ def importance_figure(data, plan, window, version):
             t.set_x(v/2.0)
             t.set_ha('center')
             t._mlr_placement='inside'
+            # Hairline white halo improves black text on coloured bars without
+            # the opaque white bbox that falsely appears to truncate a bar.
+            t.set_path_effects([patheffects.withStroke(
+                linewidth=INSIDE_LABEL_HALO_PT, foreground='white')])
         else:
             raise ValueError(f'Cannot place importance label {t.get_text()!r} '
                              f'without covering bar endpoint: value={v:.8g}; '
@@ -375,7 +381,10 @@ def importance_label_placement_qc(fig, axes):
                        label.get_ha()=='left')
             else:
                 valid=False
-            valid=bool(valid and label.get_bbox_patch() is None and
+            effects=label.get_path_effects()
+            halo_ok=(len(effects)==1 and isinstance(effects[0],patheffects.withStroke)
+                     if placement=='inside' else len(effects)==0)
+            valid=bool(valid and halo_ok and label.get_bbox_patch() is None and
                        label.get_color()=='black' and
                        label.get_fontweight()=='bold')
             records.append({'panel':panel,'row':row,'text':label.get_text(),
