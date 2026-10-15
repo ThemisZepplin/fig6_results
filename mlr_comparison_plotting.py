@@ -205,6 +205,27 @@ def scatter_figure(data, plan, window, version):
     return fig, axes.ravel().tolist(), []
 
 
+def _safe_importance_xticks(axis_max):
+    """Use readable numerical ticks strictly inside each narrow importance panel.
+
+    MaxNLocator used directly on an axis may return a last tick ABOVE xlim,
+    rendering a '90' or '0.6' label across the neighboring panel. Restrict
+    the tick *positions*, not the data or the axis limits; the full bar extent
+    and method-shared scale are unchanged.
+    """
+    upper=float(axis_max)
+    if not np.isfinite(upper) or upper<=0:
+        raise ValueError('Invalid importance axis limit')
+    safe_end=0.76*upper
+    candidates=MaxNLocator(nbins=4,min_n_ticks=3).tick_values(0.0,safe_end)
+    ticks=np.unique(candidates[(candidates>=0) & (candidates<=safe_end+1e-12)])
+    if ticks.size<3:
+        # Degenerate float limits are not anticipated; fail rather than silently
+        # removing the numerical axis required by the supervisor.
+        raise ValueError('Importance axis cannot accommodate three numeric ticks')
+    return ticks
+
+
 def importance_figure(data, plan, window, version):
     order = importance_order(data, window)
     if any(plan['order'][(init, window)] != order for init in INITS):
@@ -241,7 +262,9 @@ def importance_figure(data, plan, window, version):
                 ax.spines[side].set_visible(False)
             ax.spines['left'].set_color('0.80')
             ax.spines['left'].set_linewidth(0.6)
-            ax.xaxis.set_major_locator(MaxNLocator(nbins=3, min_n_ticks=3))
+            # Same method uses the same numeric ticks in all four init panels.
+            # Never allow MaxNLocator to draw an out-of-range 90/0.6 tick.
+            ax.set_xticks(_safe_importance_xticks(plan['bars'][method]))
             ax.tick_params(axis='x',bottom=True,labelbottom=True,labelsize=8)
             for y, v in enumerate(vals):
                 label = f'{v:.3f}' if method == 'LOFO' else f'{v:.1f}%'
