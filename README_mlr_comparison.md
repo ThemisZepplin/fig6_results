@@ -1,5 +1,15 @@
 # Final MLR raw versus residualized comparison
 
+PDF QA compatibility revision (v4): the initial v3 white-stroke text path effect
+converted some inside value labels into PDF vector outlines, causing
+PyMuPDF to miss 5 labels (Fig10 observed 44/48 percentages and 23/24 LOFO
+values). A layered text artist now paints the 0.6 pt white stroke first
+and a native editable black text glyph second; v4 keeps numeric bars and
+layout unchanged, retains every strict PDF QA threshold, and uses fresh
+`lofo_deltaR2_v4` output filenames to preserve prior v3 files.
+The updated source/tests are committed; actual HPC PDF QC remains pending.
+
+
 The latest Fig.4/10 **v3 halo-only** microrevision draws a 0.6 pt white
 Matplotlib path-effect stroke behind **inside-centered** black bar-value labels.
 Outside/end-adjacent labels have no halo, and no value label uses a white
