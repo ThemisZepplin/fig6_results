@@ -1,5 +1,16 @@
 # Final MLR raw versus residualized comparison
 
+The latest Fig.4/10 **v3 halo-only** microrevision draws a 0.6 pt white
+Matplotlib path-effect stroke behind **inside-centered** black bar-value labels.
+Outside/end-adjacent labels have no halo, and no value label uses a white
+background box. Positioning, encoded bar lengths, numerical results, model
+calculations and Fig.3/9 remain unchanged. The output files and
+revision-specific QC/manifest now use `lofo_deltaR2_v3`; existing v2 outputs
+are not overwritten. The notebook version guard rejects stale v2 imports.
+Synthetic test code has been updated but HPC end-to-end rendering/PDF QC
+has not yet been executed for v3.
+
+
 The current Fig.4/10 microrevision keeps 8 pt factor names and applies semibold
 only in the first column. It exports `_layout_v3` figure filenames and
 `figure_layout_v3_qc.json` / `table_figure_layout_v3_manifest.csv`; the v2 figures
