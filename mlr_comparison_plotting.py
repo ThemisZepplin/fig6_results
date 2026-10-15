@@ -10,7 +10,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.ticker import MaxNLocator, MultipleLocator
 
-from mlr_comparison_core import (INITS, WINDOWS, METHODS, LABELS,
+from mlr_comparison_core import (INITS, WINDOWS, VERSIONS, METHODS, LABELS,
                                  TABLE_FILES, predictors, output_guard, ATOL)
 
 WIDTH = 6.5
