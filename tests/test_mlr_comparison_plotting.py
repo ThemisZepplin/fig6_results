@@ -105,7 +105,7 @@ def test_export_four_only_and_keep_original_numerical_tables(fixture):
     assert (output.status=="PASS").all()
     assert oldhash==hashlib.sha256(old.read_bytes()).hexdigest()
     assert all_tables=={p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in (out/"tables").glob("*.csv")}
-    assert (out/"qc/figure_lofo_deltaR2_v3_qc.json").is_file()
+    assert (out/"qc/figure_lofo_deltaR2_v4_qc.json").is_file()
     for figure in ("Fig4","Fig10"):
         pdf=next(out.glob(f"figures/{figure}_*.pdf"))
         assert pdf.stat().st_size>1000
@@ -167,7 +167,7 @@ def test_revised_inside_labels_never_erase_bar_tips(fixture):
         assert qc["label_placement_inside"] > 0
         assert qc["label_placement_outside"] > 0
         assert all(record["valid"] for record in qc["label_placement_records"])
-        assert item["qc"]["basename"].endswith("_lofo_deltaR2_v3")
+        assert item["qc"]["basename"].endswith("_lofo_deltaR2_v4")
         for ax in item["fig"].axes:
             assert all(label.get_bbox_patch() is None for label in ax.texts)
             for label in ax.texts:
@@ -197,3 +197,29 @@ def test_positive_tiny_lofo_not_displayed_as_zero(fixture):
         fig, axes, labels = plot.importance_figure(copied, plan, "Total", "residualized")
     assert "<0.001" in [t.get_text() for ax in axes[8:] for t in ax.texts]
     plot.plt.close(fig)
+
+
+def test_halo_preserves_native_pdf_text_extraction(tmp_path):
+    """A stroke-only PDF loses text; layered halo must retain native glyph text."""
+    import fitz
+    import matplotlib.pyplot as plt
+    from matplotlib.ticker import NullLocator
+    fig, ax = plt.subplots(figsize=(4, 2))
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1)
+    ax.xaxis.set_major_locator(NullLocator())
+    ax.yaxis.set_major_locator(NullLocator())
+    t = plot.ExtractableHaloText(.5, .5, "42.2%", fontsize=10, color="black",
+                                 ha="center", va="center")
+    ax.add_artist(t)
+    t.set_path_effects([patheffects.withStroke(
+        linewidth=plot.INSIDE_LABEL_HALO_PT, foreground="white")])
+    pdf = tmp_path / "label-halo.pdf"
+    with plt.rc_context({"pdf.fonttype": 42, "ps.fonttype": 42}):
+        fig.savefig(pdf)
+    with fitz.open(pdf) as doc:
+        assert doc[0].get_text().count("42.2%") == 1
+        assert not doc[0].get_images()
+    assert t.get_bbox_patch() is None
+    plt.close(fig)
+
