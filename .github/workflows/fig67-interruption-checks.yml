@@ -1,0 +1,31 @@
+name: Fig6 interruption and Fig7 rendering checks
+on:
+  pull_request:
+    branches: [dev/jgr-major-revision]
+    paths:
+      - "**fig6*interruption*.py"
+      - "paper_fig8_from_cache.py"
+      - "paper_fig67_revision_from_cache.py"
+      - "tests/test_fig67_interruption_revision.py"
+      - ".github/workflows/fig67-interruption-checks.yml"
+permissions:
+  contents: read
+jobs:
+  synthetic-checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      MPLBACKEND: Agg
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install scientific and plotting test dependencies
+        run: python -m pip install numpy pandas xarray scipy statsmodels matplotlib cartopy netCDF4 pytest
+      - name: Compile Python sources and check patch whitespace
+        run: |
+          python -m compileall -q cell_leadtime_total_hotcold_composite_maps.py cell_hovmoller_tp_z500_obs_s2s_stageII.py cell_fig6_interruption_totalgroup_export.py paper_fig6_interruption_from_cache.py paper_fig7_from_cache.py paper_fig8_from_cache.py paper_fig9_from_cache.py paper_fig67_revision_from_cache.py tests/test_fig67_interruption_revision.py
+          git diff-tree --check HEAD^ HEAD
+      - name: Run synthetic exports, identity guards and geometry checks
+        run: python -m pytest -q tests/test_fig67_interruption_revision.py
