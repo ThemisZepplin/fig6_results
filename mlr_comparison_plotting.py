@@ -24,6 +24,7 @@ STYLE = {"font.family": "sans-serif", "font.sans-serif": ["Arial", "DejaVu Sans"
 FIGURE_IDS = {"Total": (3, 4, "Total"), "Stage-I": (9, 10, "June14_17")}
 FIGURE_VERSION = "residualized"
 FIGURE_REVISION = "lofo_deltaR2_v1"
+IMPORTANCE_REVISION = "lofo_deltaR2_v2"  # Style-only; Fig3/9 preserve v1
 IMPORTANCE_REFERENCE_ORDER = {
     'Total': ('NCHN_tp', 'z500_anom_NCHN', 'NCVI_concurrent', 'TCC_resid',
               'Initial_MSEstar_max_NCHN', 'SM_resid'),
@@ -267,25 +268,44 @@ def importance_figure(data, plan, window, version):
             ax.set_xticks(_safe_importance_xticks(plan['bars'][method]))
             ax.tick_params(axis='x',bottom=True,labelbottom=True,labelsize=8)
             for y, v in enumerate(vals):
-                label = f'{v:.3f}' if method == 'LOFO' else f'{v:.1f}%'
+                # Preserve positive sub-0.0005 values instead of rounding to 0.000.
+                label = (('<0.001' if 0 < v < 0.0005 else f'{v:.3f}')
+                         if method == 'LOFO' else f'{v:.1f}%')
                 t = ax.text(v, y, label, va='center', ha='left', color='black',
                             fontweight='bold', fontsize=8.0)
                 value_texts.append((ax, t, float(v), y))
             axes.append(ax)
     fig.canvas.draw()
     renderer = fig.canvas.get_renderer()
-    # Prefer outside endpoints; use a small white backing only for inside fallbacks.
+    # Measure at FINAL 6.5-inch canvas width. Short bars carry values outside;
+    # when a label will not fit to the right, place it at the bar CENTER
+    # WITHOUT a white rectangle that visually shortens the encoded bar.
+    clearance_px = fig.dpi / 72.0 * 2.0
     for ax, t, v, y in value_texts:
-        text_width = t.get_window_extent(renderer).width
-        end_px = ax.transData.transform((v, y))[0]
-        pad_px = fig.dpi / 72 * 2.0
-        inside = end_px + pad_px + text_width > ax.get_window_extent(renderer).x1
-        label_px = end_px - pad_px if inside else end_px + pad_px
-        xpos = ax.transData.inverted().transform((label_px, ax.transData.transform((0, y))[1]))[0]
-        t.set_x(xpos); t.set_ha('right' if inside else 'left')
-        if inside:
-            t.set_bbox(dict(facecolor='white', edgecolor='none', alpha=0.95,
-                            boxstyle='round,pad=0.12'))
+        bounds=ax.get_window_extent(renderer)
+        text_width=t.get_window_extent(renderer).width
+        zero_px=ax.transData.transform((0.0,y))[0]
+        end_px=ax.transData.transform((v,y))[0]
+        room_right = bounds.x1 - end_px
+        fit_outside = room_right >= text_width + 2.0*clearance_px
+        fit_inside = end_px-zero_px >= text_width + 2.0*clearance_px
+        if fit_outside:
+            label_px=end_px + clearance_px
+            t.set_x(ax.transData.inverted().transform(
+                (label_px,ax.transData.transform((0.0,y))[1]))[0])
+            t.set_ha('left')
+            t._mlr_placement='outside'
+        elif fit_inside:
+            t.set_x(v/2.0)
+            t.set_ha('center')
+            t._mlr_placement='inside'
+        else:
+            raise ValueError(f'Cannot place importance label {t.get_text()!r} '
+                             f'without covering bar endpoint: value={v:.8g}; '
+                             'increase panel width or revise tick/layout spacing')
+        # NO bbox for any importance value: color must remain visible to the tip.
+        if t.get_bbox_patch() is not None:
+            raise ValueError('A label background is obscuring a data bar')
     fig.canvas.draw()
     return fig, axes, [t for _, t, _, _ in value_texts]
 
@@ -319,6 +339,56 @@ def layout_qc(fig, axes, values):
             'axes_box_inches': sizes.tolist(), 'width_inches': fig.get_figwidth(),
             'height_inches': fig.get_figheight(), 'status': 'PASS' if not clipped and not collisions and not outside_axes and np.allclose(sizes, sizes[0], atol=1e-10) else 'FAIL',
             'manual_review': 'Inspect genuine HPC figures for text/data occlusion; extent checks do not establish scientific visual adequacy.'}
+
+
+def importance_label_placement_qc(fig, axes):
+    """Audit every value label against the ACTUAL bar and rendered text extents.
+
+    Non-interference with bar endpoints is a separate scientific legibility gate,
+    because generic text-to-text collision checks do not detect bar occlusion.
+    """
+    fig.canvas.draw()
+    renderer=fig.canvas.get_renderer()
+    slack_px=fig.dpi/72.0*0.35
+    records=[]; failures=[]
+    for panel,ax in enumerate(axes):
+        patches=list(ax.patches)
+        texts=list(ax.texts)
+        if len(patches)!=6 or len(texts)!=6:
+            failures.append(f'panel {panel}: expected 6 bars and 6 labels, '
+                            f'found {len(patches)} and {len(texts)}')
+            continue
+        frame=ax.get_window_extent(renderer)
+        for row,(bar,label) in enumerate(zip(patches,texts)):
+            bounds=label.get_window_extent(renderer)
+            bar_bounds=bar.get_window_extent(renderer)
+            placement=getattr(label,'_mlr_placement',None)
+            if placement=='inside':
+                valid=(bounds.x0>=bar_bounds.x0-slack_px and
+                       bounds.x1<=bar_bounds.x1+slack_px and
+                       bounds.y0>=bar_bounds.y0-slack_px and
+                       bounds.y1<=bar_bounds.y1+slack_px and
+                       label.get_ha()=='center')
+            elif placement=='outside':
+                valid=(bounds.x0>=bar_bounds.x1-slack_px and
+                       bounds.x1<=frame.x1+slack_px and
+                       label.get_ha()=='left')
+            else:
+                valid=False
+            valid=bool(valid and label.get_bbox_patch() is None and
+                       label.get_color()=='black' and
+                       label.get_fontweight()=='bold')
+            records.append({'panel':panel,'row':row,'text':label.get_text(),
+                            'placement':placement,'valid':valid})
+            if not valid:
+                failures.append(f'panel {panel}, row {row}: {label.get_text()!r}, '
+                                f'placement={placement}; label/bar geometry invalid')
+    return {'label_placement_status':'PASS' if not failures and len(records)==72 else 'FAIL',
+            'label_placement_count':len(records),
+            'label_placement_inside':sum(r['placement']=='inside' for r in records),
+            'label_placement_outside':sum(r['placement']=='outside' for r in records),
+            'label_placement_failures':failures,
+            'label_placement_records':records}
 
 
 def importance_alignment_qc(fig, axes):
@@ -395,10 +465,13 @@ def make_figures(data, plan, kind):
                 qc = layout_qc(fig, axes, values)
                 if kind == 'importance':
                     qc.update(importance_alignment_qc(fig, axes))
-                    if qc['alignment_status'] != 'PASS':
+                    qc.update(importance_label_placement_qc(fig, axes))
+                    if (qc['alignment_status'] != 'PASS' or
+                            qc['label_placement_status'] != 'PASS'):
                         qc['status'] = 'FAIL'
                 qc.update({'figure': f'Fig{number}', 'window': window, 'version': version,
-                           'basename': f'Fig{number}_{stem}_{version}_{FIGURE_REVISION}',
+                           'basename': f'Fig{number}_{stem}_{version}_' +
+                                       (IMPORTANCE_REVISION if kind=='importance' else FIGURE_REVISION),
                            'axes': [{'xlim': list(a.get_xlim()), 'ylim': list(a.get_ylim()),
                                      'xticks': a.get_xticks().tolist(), 'yticks': a.get_yticks().tolist()} for a in axes]})
                 built.append({'fig': fig, 'qc': qc})
@@ -408,13 +481,13 @@ def make_figures(data, plan, kind):
 def save_figures(built, input_root, output_root):
     out = output_guard(input_root, output_root)
     numbers = {b['qc']['figure'] for b in built}
-    if len(built)!=4 or numbers!={'Fig3','Fig4','Fig9','Fig10'}:
-        raise ValueError('Expected four residualized-only figures')
+    if len(built)!=2 or numbers!={'Fig4','Fig10'}:
+        raise ValueError('Style revision exports only the two new importance figures; Fig3/9 v1 untouched')
     if any(x['qc']['version']!=FIGURE_VERSION for x in built):
         raise ValueError('Raw versions are excluded from main figures')
     qcs = [b['qc'] for b in built]
     (out / 'qc').mkdir(parents=True, exist_ok=True)
-    qc_path = out / ('qc/figure_'+FIGURE_REVISION+'_qc.json')
+    qc_path = out / ('qc/figure_'+IMPORTANCE_REVISION+'_qc.json')
     qc_path.write_text(json.dumps(qcs, indent=2), encoding='utf-8')
     if any(q['status'] != 'PASS' for q in qcs):
         raise ValueError('Rendered figure layout QC failed; inspect revision-specific QC file. No figure files exported.')
@@ -450,5 +523,5 @@ def save_figures(built, input_root, output_root):
                          'png_sha256': hashlib.sha256(png.read_bytes()).hexdigest(),
                          'pdf_sha256': hashlib.sha256(pdf.read_bytes()).hexdigest(), 'status': 'PASS'})
         plt.close(fig)
-    pd.DataFrame(manifest).to_csv(out / ('qc/table_figure_'+FIGURE_REVISION+'_manifest.csv'), index=False)
+    pd.DataFrame(manifest).to_csv(out / ('qc/table_figure_'+IMPORTANCE_REVISION+'_manifest.csv'), index=False)
     return pd.DataFrame(manifest)
