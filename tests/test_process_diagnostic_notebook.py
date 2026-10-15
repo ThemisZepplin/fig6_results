@@ -48,14 +48,16 @@ def test_scatter_layout_and_explicit_plot_tables():
     for name in ['fig5_total_timeseries_plot.csv','fig11_stageI_timeseries_','figS11_stageI_scatter_','group_membership_audit.csv','consistency_manifest.json']:
         assert name in whole
     assert 'fig.suptitle' not in whole
-    env=dict(TCC_SOURCE_UNITS={'S2S':'auto','ERA5':'auto'},BAND_COLUMNS=('value_lower','value_upper'),np=np,pd=pd,plt=plt,mdates=mdates,Line2D=Line2D,MaxNLocator=MaxNLocator,INITS=('2023-06-08','2023-06-12'),GROUPS=('Hot17','Middle17','Cold17'))
+    env=dict(TCC_SOURCE_UNITS={'S2S':'auto','ERA5':'auto'},BAND_COLUMNS=('value_lower','value_upper'),np=np,pd=pd,plt=plt,mdates=mdates,Line2D=Line2D,MaxNLocator=MaxNLocator,INITS=('2023-06-05','2023-06-08'),GROUPS=('Hot17','Middle17','Cold17'),SCATTER_FACTORS_BY_INIT={'2023-06-05':('z500_anom_NCHN','NCVI_concurrent'),'2023-06-08':('sm_avg','partial_fitted_Tmax')})
     nodes=[n for n in ast.parse(''.join(nb()['cells'][4]['source'])).body if isinstance(n,(ast.FunctionDef,ast.Assign)) and (isinstance(n,ast.FunctionDef) or any(isinstance(t,ast.Name) and t.id in ['COLORS','LABELS','STYLE','MARKERS','LINESTYLES'] for t in n.targets))]
     exec(compile(ast.Module(body=nodes,type_ignores=[]),'scatter','exec'),env)
-    records=[dict(init_date=init,member=m,group=env['GROUPS'][m//17],model_version=v,sm_avg=.15+m*.001,y_tmax=30+m*.08,partial_fitted_Tmax=31+m*.04+(.1 if v=='raw' else 0)) for init in env['INITS'] for v in ['raw','residualized'] for m in range(51)]
+    records=[dict(init_date=init,member=m,group=env['GROUPS'][m//17],model_version=v,sm_avg=.15+m*.001,y_tmax=30+m*.08,partial_fitted_Tmax=31+m*.04+(.1 if v=='raw' else 0),z500_anom_NCHN=-20+m*2,NCVI_concurrent=-.3+m*.01) for init in env['INITS'] for v in ['raw','residualized'] for m in range(51)]
     with plt.rc_context(env['STYLE']):
         fig,axes=env['scatter_figure'](pd.DataFrame(records),'raw')
-        assert len(axes)==4 and axes[0].get_xlabel().startswith('SM (')
-        assert axes[2].get_xlabel().startswith('SM–SHF')
+        assert len(axes)==4 and axes[0].get_xlabel()=='Z500 anomaly (gpm)'
+        assert axes[1].get_xlabel().startswith('SM (')
+        assert axes[2].get_xlabel()=='NCVI anomaly (PVU)'
+        assert axes[3].get_xlabel().startswith('SM–SHF')
         assert env['figure_qc'](fig,axes)['text_extent_qc']=='PASS'
 
         # The prior y=.975 placed headings 1.13 PDF pt above page top.
@@ -109,7 +111,7 @@ def test_cell4_member_diagnostic_branch_executes_dict_y(tmp_path):
     def parameters(data,init,version):
         calls.append((init,version))
         return {'y':stage[stage.init_date==init].set_index('member').y_tmax.copy(),'version':version,'design':pd.DataFrame({'NCVI_concurrent':np.linspace(-.1,.1,51)},index=np.arange(51))}
-    env=dict(np=np,pd=pd,STAGE=path,EARLY_INITS=('2023-06-08','2023-06-12'),VERSIONS=('residualized',),
+    env=dict(np=np,pd=pd,STAGE=path,STAGEI_INITS=('2023-06-08','2023-06-12'),VERSIONS=('residualized',),
              normalize_window=lambda s:s,parameters=parameters,data={},current_groups=groups,
              residual_relation=lambda data,init:(0.,1.),
              partial_fitted_tmax=lambda sm,shf,model,relation:(np.asarray(sm)+np.asarray(shf)+(1 if model['version']=='raw' else 0),np.asarray(shf)))
@@ -156,6 +158,7 @@ def test_daily_markers_land_exactly_on_labelled_ticks_and_scatter_stats_use_righ
                 assert [x.get_text() for x in axes[-1].get_xticklabels()]==[
                     d.strftime('%m-%d') for d in pd.date_range('2023-06-14','2023-06-24')]
             plt.close(fig)
+    env['SCATTER_FACTORS_BY_INIT']={'2023-06-08':('sm_avg','partial_fitted_Tmax'),'2023-06-12':('sm_avg','partial_fitted_Tmax')}
     df=pd.DataFrame([
         dict(init_date=init,model_version=version,member=m,
              group=env['GROUPS'][m//17],sm_avg=.12+.001*m,
@@ -166,7 +169,7 @@ def test_daily_markers_land_exactly_on_labelled_ticks_and_scatter_stats_use_righ
         for ax in axes:
             text_boxes=[obj for obj in ax.texts if 'n = 51' in obj.get_text()]
             assert len(text_boxes)==1
-            if ax in axes[:2]:
+            if ax.get_xlabel().startswith('SM ('):
                 assert text_boxes[0].get_position()[0] >= .95
                 assert text_boxes[0].get_ha()=='right'
             else:
@@ -272,7 +275,8 @@ def test_tcc_fixed_physical_ylim_and_no_extra_date_axis_title():
 def plotting_env():
     env=dict(np=np,pd=pd,plt=plt,mdates=mdates,Line2D=Line2D,MaxNLocator=MaxNLocator,
              INITS=('2023-06-08','2023-06-12'),GROUPS=('Hot17','Middle17','Cold17'),
-             TCC_SOURCE_UNITS={'S2S':'auto','ERA5':'auto'},BAND_COLUMNS=('value_lower','value_upper'))
+             TCC_SOURCE_UNITS={'S2S':'auto','ERA5':'auto'},BAND_COLUMNS=('value_lower','value_upper'),
+             SCATTER_FACTORS_BY_INIT={'2023-06-05':('z500_anom_NCHN','NCVI_concurrent'),'2023-06-08':('sm_avg','partial_fitted_Tmax')})
     nodes=[node for node in ast.parse(''.join(nb()['cells'][4]['source'])).body
            if isinstance(node,ast.FunctionDef) or isinstance(node,ast.Assign) and
            any(isinstance(t,ast.Name) and t.id in ('COLORS','LABELS','STYLE','MARKERS','LINESTYLES') for t in node.targets)]
@@ -303,7 +307,7 @@ def test_requested_limits_expand_to_include_all_curves_and_uncertainty_bands():
     bounds,ticks,info=env['row_limits'](frame,'z500_anom_NCHN','Total')
     assert bounds==(-75.,125.) and info['expanded']
     assert np.allclose(np.diff(ticks),25)
-    for factor,expected,step in [('NCHN_tp',(-1.,10.),1),('NCVI_concurrent',(-.3,.25),.05)]:
+    for factor,expected,step in [('NCHN_tp',(-1.,10.),1),('NCVI_concurrent',(-.3,.25),.10)]:
         f=frame.drop(columns=['value_lower','value_upper']).copy();f['value']=[0.,.1]
         bounds,ticks,info=env['row_limits'](f,factor,'Total')
         assert bounds==expected and not info['expanded']
@@ -313,20 +317,33 @@ def test_requested_limits_expand_to_include_all_curves_and_uncertainty_bands():
     invalid=frame.copy();invalid.loc[0,'value_lower']=1.
     with pytest.raises(ValueError,match='do not contain'):env['row_limits'](invalid,'z500_anom_NCHN','Total')
 
+    stage=pd.DataFrame(dict(init_date=['2023-06-05']*2,group=['Cold17','Hot17'],value=[27.91,31.92]))
+    bounds,ticks,info=env['row_limits'](stage,'partial_fitted_Tmax','Stage-I',init='2023-06-05')
+    assert bounds==(27.,32.) and info['expanded'] and np.allclose(np.diff(ticks),1.)
+    stage['init_date']='2023-06-08';stage['value']=[32.28,34.61]
+    bounds,ticks,info=env['row_limits'](stage,'partial_fitted_Tmax','Stage-I',init='2023-06-08')
+    assert bounds==(32.,35.) and not info['expanded'] and np.allclose(np.diff(ticks),.5)
+    stage['init_date']='2023-06-05';stage['value']=[-5.1,83.9]
+    bounds,ticks,info=env['row_limits'](stage,'z500_anom_NCHN','Stage-I',init='2023-06-05')
+    assert bounds==(-25.,125.) and info['expanded'] and np.allclose(np.diff(ticks),25.)
 
-def test_new_early_circulation_scatter_uses_correct_dates_factors_and_window_label(tmp_path):
-    env=plotting_env();pair=('2023-06-01','2023-06-05')
+
+def test_selected_mechanism_scatter_uses_asymmetric_factors_and_window_label(tmp_path):
+    env=plotting_env();pair=('2023-06-05','2023-06-08')
     df=pd.DataFrame([dict(init_date=init,member=m,group=env['GROUPS'][m//17],model_version='residualized',
                          y_tmax=30+m*.07+np.sin(m)*.2,z500_anom_NCHN=-30+m*2,
                          NCVI_concurrent=-.15+m*.005,sm_avg=.1+m*.002,partial_fitted_Tmax=31+m*.04)
                      for init in pair for m in range(51)])
     with plt.rc_context(env['STYLE']):
-        fig,axes=env['scatter_figure'](df,'residualized',inits=pair,factors=('z500_anom_NCHN','NCVI_concurrent'))
+        fig,axes=env['scatter_figure'](df,'residualized',inits=pair,factors_by_init=env['SCATTER_FACTORS_BY_INIT'])
         assert axes[0].get_xlabel()=='Z500 anomaly (gpm)'
+        assert axes[1].get_xlabel()=='SM (m³ m⁻³)'
         assert axes[2].get_xlabel()=='NCVI anomaly (PVU)'
+        assert axes[3].get_xlabel()=='SM–SHF diagnostic (°C)'
         assert all(a.get_ylabel()=='6.14–17 Tmax (°C)' for a in axes)
-        assert [t.get_text() for t in fig.texts]==['01 June 2023','05 June 2023']
-        assert all(t.get_ha()=='right' for a in axes for t in a.texts if 'n = 51' in t.get_text())
+        assert [t.get_text() for t in fig.texts]==['05 June 2023','08 June 2023']
+        boxes=[next(t for t in a.texts if 'n = 51' in t.get_text()) for a in axes]
+        assert [t.get_ha() for t in boxes]==['right','right','right','left']
         assert env['figure_qc'](fig,axes)['text_extent_qc']=='PASS'
         path=tmp_path/'circulation.pdf';fig.savefig(path)
         import fitz
@@ -334,10 +351,11 @@ def test_new_early_circulation_scatter_uses_correct_dates_factors_and_window_lab
         plt.close(fig)
 
 
-def test_config_separates_total_and_exploratory_early_pairs_and_frozen_math():
+def test_config_separates_total_and_selected_process_pair_and_frozen_math():
     source=''.join(nb()['cells'][0]['source'])
     assert "TOTAL_INITS=('2023-06-08','2023-06-12')" in source
-    assert "EARLY_PAIRS=(('2023-06-08','2023-06-12'),('2023-06-01','2023-06-05'))" in source
+    assert "FIG11_INITS=('2023-06-05','2023-06-08')" in source
+    assert "PROCESS_PAIRS=(FIG11_INITS,)" in source
     assert "VERSIONS=('residualized',)" in source
     # These numerical definitions must remain independent of the plotting repair.
     tree=ast.parse(''.join(nb()['cells'][1]['source']))
