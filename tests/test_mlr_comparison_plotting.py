@@ -4,6 +4,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 import matplotlib
+from matplotlib import patheffects
 matplotlib.use("Agg")
 import mlr_comparison_core as core
 import mlr_comparison_plotting as plot
@@ -104,7 +105,7 @@ def test_export_four_only_and_keep_original_numerical_tables(fixture):
     assert (output.status=="PASS").all()
     assert oldhash==hashlib.sha256(old.read_bytes()).hexdigest()
     assert all_tables=={p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in (out/"tables").glob("*.csv")}
-    assert (out/"qc/figure_lofo_deltaR2_v2_qc.json").is_file()
+    assert (out/"qc/figure_lofo_deltaR2_v3_qc.json").is_file()
     for figure in ("Fig4","Fig10"):
         pdf=next(out.glob(f"figures/{figure}_*.pdf"))
         assert pdf.stat().st_size>1000
@@ -166,9 +167,19 @@ def test_revised_inside_labels_never_erase_bar_tips(fixture):
         assert qc["label_placement_inside"] > 0
         assert qc["label_placement_outside"] > 0
         assert all(record["valid"] for record in qc["label_placement_records"])
-        assert item["qc"]["basename"].endswith("_lofo_deltaR2_v2")
+        assert item["qc"]["basename"].endswith("_lofo_deltaR2_v3")
         for ax in item["fig"].axes:
             assert all(label.get_bbox_patch() is None for label in ax.texts)
+            for label in ax.texts:
+                effects = label.get_path_effects()
+                if label._mlr_placement == "inside":
+                    assert len(effects) == 1
+                    assert isinstance(effects[0], patheffects.withStroke)
+                    assert effects[0]._gc["linewidth"] == pytest.approx(0.6)
+                    assert effects[0]._gc["foreground"] == "white"
+                else:
+                    assert label._mlr_placement == "outside"
+                    assert effects == []
         plot.plt.close(item["fig"])
 
 
