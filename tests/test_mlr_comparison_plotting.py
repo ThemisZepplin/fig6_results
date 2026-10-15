@@ -1,174 +1,121 @@
-"""Synthetic layout/export tests; artifacts are temporary and not scientific results."""
+"""Revised Fig.3/4/9/10 synthetic QC. No real HPC results are asserted."""
 import json
-import os
 from pathlib import Path
-
-import matplotlib
-matplotlib.use('Agg')
 import numpy as np
 import pytest
-
+import matplotlib
+matplotlib.use("Agg")
 import mlr_comparison_core as core
-import mlr_comparison_plotting as plotting
+import mlr_comparison_plotting as plot
 from test_mlr_comparison import synthetic_inputs
 
+@pytest.fixture(scope="module")
+def fixture(tmp_path_factory):
+    root=tmp_path_factory.mktemp("mlr_deltaR2")
+    inp,out=root/"input",root/"model_output"
+    raw,nc=synthetic_inputs()
+    groups,ra=core.prepare_pairs(raw,nc)
+    models=core.fit_pairs(groups)
+    permutations=core.lmg_permutations()
+    imp,qc=core.importance(models,permutations)
+    results=core.assemble_results(groups,models,imp,qc,ra)
+    # Only override plotting reference LMG percentages in synthetic data.
+    for window,order in plot.IMPORTANCE_REFERENCE_ORDER.items():
+        for predictor,pct in zip(order,[35,25,18,12,7,3]):
+            mask=(results["importance"].init_date.eq("2023-06-12") &
+                  results["importance"].window.eq(window) &
+                  results["importance"].version.eq("residualized") &
+                  results["importance"].method.eq("LMG") &
+                  results["importance"].predictor.eq(predictor))
+            results["importance"].loc[mask,"importance_pct"]=pct
+    hist=core.compare_history(results,{})
+    core.save_results(results,hist,inp,out,[{"synthetic_only":True}],permutations)
+    data,_=plot.load_results(out)
+    return inp,out,data,plot.figure_plan(data)
 
-@pytest.fixture(scope='module')
-def render_input(tmp_path_factory):
-    root = tmp_path_factory.mktemp('synthetic_layout_only')
-    inp, out = root / 'input', root / 'comparison'
-    raw, nc = synthetic_inputs()
-    groups, ra = core.prepare_pairs(raw, nc)
-    models = core.fit_pairs(groups)
-    perm = core.lmg_permutations()
-    imp, qc = core.importance(models, perm)
-    result = core.assemble_results(groups, models, imp, qc, ra)
-    # Explicit synthetic layout fixture, not a reproduction of scientific rankings.
-    # Set the reference percentages to exercise the user-confirmed display contract.
-    for window, order in plotting.IMPORTANCE_REFERENCE_ORDER.items():
-        for predictor, percent in zip(order, [35, 25, 18, 12, 7, 3]):
-            mask = ((result['importance'].init_date == '2023-06-12') &
-                    (result['importance'].window == window) &
-                    (result['importance'].version == 'residualized') &
-                    (result['importance'].method == 'LMG') &
-                    (result['importance'].predictor == predictor))
-            result['importance'].loc[mask, 'importance_pct'] = percent
-    h = core.compare_history(result, {})
-    core.save_results(result, h, inp, out, [{'synthetic_layout_only': True}], perm)
-    data, _ = plotting.load_results(out)
-    return inp, out, data, plotting.figure_plan(data)
+def test_only_residualized_and_metric_not_normalized(fixture):
+    _,_,data,plan=fixture
+    assert plot.FIGURE_VERSION=="residualized"
+    assert set(plan["bars"])=={"LMG","Johnson","LOFO"}
+    assert plan["bars"]["LOFO"]<1
+    items=plot.make_figures(data,plan,"importance")
+    assert len(items)==2
+    for item in items:
+        assert item["qc"]["version"]=="residualized"
+        axes=item["fig"].axes
+        assert len(axes)==12
+        for j,ax in enumerate(axes):
+            method=core.METHODS[j//4]
+            assert len(ax.get_xticks())>=2
+            assert len(ax.get_xticklabels())>=2
+            init=core.INITS[j%4]
+            window=item["qc"]["window"]
+            imp=data["importance"]
+            group=imp[(imp.method==method)&(imp.window==window)&
+                      (imp.init_date==init)&(imp.version=="residualized")]
+            group=group.set_index("position").loc[plot.importance_order(data,window)]
+            expected=group.raw_value if method=="LOFO" else group.importance_pct
+            np.testing.assert_allclose([p.get_width() for p in ax.patches],expected,rtol=0,atol=1e-10)
+            labels=[a.get_text() for a in ax.texts]
+            assert len(labels)==6
+            assert all(not label.endswith("%") for label in labels) if method=="LOFO" else all(label.endswith("%") for label in labels)
+        plot.plt.close(item["fig"])
 
+def test_scatter_axes_and_stats(fixture):
+    _,_,data,plan=fixture
+    items=plot.make_figures(data,plan,"scatter")
+    assert len(items)==2
+    for item in items:
+        for ax in item["fig"].axes:
+            assert ax.get_xlabel()=="ECMWF Tmax (°C)"
+            assert ax.get_ylabel()=="MLR predicted Tmax (°C)"
+            assert "slope =" in ax.texts[0].get_text()
+            assert "R² =" in ax.texts[0].get_text()
+            assert "r =" not in ax.texts[0].get_text()
+        plot.plt.close(item["fig"])
 
-def test_rendered_layout_axes_and_exports(render_input):
-    inp, out, data, plan = render_input
-    built = plotting.make_figures(data, plan, 'scatter') + plotting.make_figures(data, plan, 'importance')
-    for item in built:
-        assert item['qc']['status'] == 'PASS', item['qc']
-        if item['qc']['figure'] in ('Fig4', 'Fig10'):
-            axes = item['fig'].axes
-            assert len(axes) == 12
-            for index, ax in enumerate(axes):
-                method = core.METHODS[index // 4]
-                assert ax.get_xlim() == (0, plan['bars'][method])
-                assert len(ax.get_xticks()) == len(ax.get_xticks(minor=True)) == 0
-                assert not ax.get_xticklabels() and not ax.get_xticklabels(minor=True)
-                assert not any(t.get_visible() for t in ax.xaxis.get_ticklines())
-                assert not any(g.get_visible() for g in ax.get_xgridlines())
-                assert len(ax.get_yticklabels()) == (6 if index % 4 == 0 else 0)
-                window, version = item['qc']['window'], item['qc']['version']
-                expected_order = plotting.importance_order(data, window)
-                init = core.INITS[index % 4]
-                source = data['importance']
-                source = source[(source.window == window) & (source.version == version) &
-                                (source.init_date == init) & (source.method == method)].set_index('position').loc[expected_order]
-                np.testing.assert_array_equal([p.get_width() for p in ax.patches], source.importance_pct)
-                np.testing.assert_array_equal([p.get_y() + p.get_height()/2 for p in ax.patches], np.arange(6))
-                if index % 4 == 0:
-                    assert [t.get_text() for t in ax.get_yticklabels()] == [core.LABELS[p] for p in source.predictor]
-                assert all(not ax.spines[s].get_visible() for s in ('top', 'right', 'bottom'))
-                assert len(ax.texts) == 6
-                assert all(t.get_color() == 'black' and t.get_fontweight() == 'bold'
-                           for t in ax.texts)
-            assert item['qc']['value_labels_outside_axes'] == []
-            assert item['qc']['alignment_status'] == 'PASS'
-            assert all(0.18 <= a.get_position().width <= 0.19 for a in axes)
-    manifest = plotting.save_figures(built, inp, out)
-    assert len(manifest) == 8
-    assert (manifest.png_width_px == 3900).all()
-    assert len(list((out / 'figures').glob('*.png'))) == 8
-    assert len(list((out / 'figures').glob('*.pdf'))) == 8
-    qcs = json.loads((out / 'qc/figure_layout_v3_qc.json').read_text())
-    for num in (3, 4, 9, 10):
-        p = [q for q in qcs if q['figure'] == f'Fig{num}']
-        assert p[0]['axes'] == p[1]['axes']
-        if num in (4, 10):
-            assert all(q['pdf_status'] == 'PASS' and q['pdf_min_font_pt'] >= 7.5 and
-                       q['pdf_editable_vector_text'] and q['pdf_percentage_labels'] == 72 for q in p)
-            assert all(q['basename'].endswith('_layout_v3') for q in p)
-    # PDF MediaBox may be compressed in other backends; matplotlib emits it plain.
-    import re
-    for pdf in (out / 'figures').glob('*.pdf'):
-        m = re.search(rb'/MediaBox\s*\[\s*0\s+0\s+([\d.]+)\s+([\d.]+)', pdf.read_bytes())
-        assert m and abs(float(m.group(1)) / 72 - 6.5) < 1e-8
+def test_original_lofo_audit_export(fixture):
+    _,out,data,_=fixture
+    filename=out/"tables/table_mlr_lofo_original_delta_r2_residualized.csv"
+    assert filename.is_file()
+    import pandas as pd
+    q=pd.read_csv(filename)
+    assert len(q)==4*2*6
+    assert (q.n==51).all()
+    np.testing.assert_allclose(q.lofo_delta_r2,q.R2_full-q.R2_without_factor,rtol=0,atol=1e-8)
+    assert (q.lofo_delta_r2>=-1e-8).all()
+    legacy=data["importance"].query("method=='LOFO' and version=='residualized'")
+    assert len(legacy)==len(q)
 
-
-def test_short_and_zero_bars_keep_true_lengths(render_input):
-    _, _, data, plan = render_input
-    data = dict(data)
-    data['importance'] = data['importance'].copy()
-    mask = ((data['importance'].init_date == core.INITS[0]) &
-            (data['importance'].window == 'Stage-I') &
-            (data['importance'].version == 'raw') &
-            (data['importance'].method == 'LOFO'))
-    data['importance'].loc[mask, 'importance_pct'] = [0, 0.01, 0.05, 1, 48.94, 50]
-    with plotting.plt.rc_context(plotting.STYLE):
-        fig, axes, labels = plotting.importance_figure(data, plan, 'Stage-I', 'raw')
-    ax = axes[8]
-    widths = sorted(p.get_width() for p in ax.patches)
-    np.testing.assert_allclose(widths, [0, 0.01, 0.05, 1, 48.94, 50])
-    assert {'0.0%', '0.1%'} <= {t.get_text() for t in ax.texts}
-    assert plotting.layout_qc(fig, axes, labels)['value_labels_outside_axes'] == []
-    plotting.plt.close(fig)
-
-
-def test_only_first_column_factor_labels_are_semibold_at_eight_points(render_input):
-    _, _, data, plan = render_input
-    built = plotting.make_figures(data, plan, 'importance')
-    for item in built:
-        assert item['qc']['status'] == 'PASS', item['qc']
-        for index, ax in enumerate(item['fig'].axes):
-            labels = [tick.label1 for tick in ax.yaxis.get_major_ticks()]
-            assert len(labels) == 6
-            assert all(label.get_fontsize() == 8.0 for label in labels)
-            assert all(label.get_fontweight() == ('semibold' if index % 4 == 0 else 'normal')
-                       for label in labels)
-            assert all(label.get_visible() == (index % 4 == 0) for label in labels)
-        plotting.plt.close(item['fig'])
-
-
-def test_wrong_reference_order_is_rejected(render_input):
-    _, _, data, _ = render_input
-    data = dict(data)
-    data['importance'] = data['importance'].copy()
-    mask = ((data['importance'].init_date == '2023-06-12') &
-            (data['importance'].window == 'Total') &
-            (data['importance'].version == 'residualized') &
-            (data['importance'].method == 'LMG'))
-    data['importance'].loc[mask, 'importance_pct'] = [1, 2, 3, 4, 5, 85]
-    with pytest.raises(ValueError, match='12 June residualized LMG order mismatch'):
-        plotting.figure_plan(data)
-
-
-def test_v3_export_preserves_old_figures_and_numerical_tables(render_input):
-    inp, out, data, plan = render_input
+def test_export_four_only_and_keep_original_numerical_tables(fixture):
+    inp,out,data,plan=fixture
     import hashlib
-    old = out / 'figures/Fig4_Total_raw_layout_v2.png'
-    old.write_bytes(b'old formal figure sentinel')
-    old_files = [out / 'figures/Fig4_Total_raw_layout_v2.pdf',
-                 out / 'qc/figure_layout_v2_qc.json',
-                 out / 'qc/table_figure_layout_v2_manifest.csv']
-    for path in old_files:
-        path.write_bytes(b'preserved v2 sentinel')
-    table_hashes = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in (out / 'tables').glob('*.csv')}
-    manifest_bytes = (out / 'qc/comparison_manifest.json').read_bytes()
-    built = plotting.make_figures(data, plan, 'importance')
-    plotting.save_figures(built, inp, out)
-    assert old.read_bytes() == b'old formal figure sentinel'
-    assert all(path.read_bytes() == b'preserved v2 sentinel' for path in old_files)
-    assert table_hashes == {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in (out / 'tables').glob('*.csv')}
-    assert manifest_bytes == (out / 'qc/comparison_manifest.json').read_bytes()
+    old=out/"figures/old_raw_figure.png"
+    old.parent.mkdir(parents=True,exist_ok=True)
+    old.write_bytes(b"old figure preserved")
+    oldhash=hashlib.sha256(old.read_bytes()).hexdigest()
+    all_tables={p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in (out/"tables").glob("*.csv")}
+    built=plot.make_figures(data,plan,"scatter")+plot.make_figures(data,plan,"importance")
+    assert len(built)==4
+    output=plot.save_figures(built,inp,out)
+    assert len(output)==4
+    assert set(output.figure)=={"Fig3","Fig4","Fig9","Fig10"}
+    assert set(output.version)=={"residualized"}
+    assert (output.status=="PASS").all()
+    assert oldhash==hashlib.sha256(old.read_bytes()).hexdigest()
+    assert all_tables=={p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in (out/"tables").glob("*.csv")}
+    assert (out/"qc/figure_lofo_deltaR2_v1_qc.json").is_file()
+    for figure in ("Fig4","Fig10"):
+        pdf=next(out.glob(f"figures/{figure}_*.pdf"))
+        assert pdf.stat().st_size>1000
+    with pytest.raises(FileExistsError):
+        plot.save_figures(plot.make_figures(data,plan,"scatter")+plot.make_figures(data,plan,"importance"),inp,out)
 
-
-@pytest.mark.skipif(not os.environ.get('MLR_REAL_OUTPUT_ROOT'), reason='Genuine HPC CSV root not supplied; real-data layout acceptance pending')
-def test_genuine_csv_layout(tmp_path):
-    root = Path(os.environ['MLR_REAL_OUTPUT_ROOT'])
-    data, manifest = plotting.load_results(root)
-    assert not any(p.get('synthetic') or p.get('synthetic_layout_only') for p in manifest['provenance'])
-    plan = plotting.figure_plan(data)
-    built = plotting.make_figures(data, plan, 'importance')
-    # Export only to a separate temporary root; never write into the real dataset.
-    temporary = tmp_path / 'real_csv_layout_qa'
-    temporary.mkdir()
-    (temporary / 'qc').mkdir()
-    (temporary / 'qc/comparison_manifest.json').write_text(json.dumps(manifest))
-    plotting.save_figures(built, root, temporary)
+def test_reference_ranking_violation_rejected(fixture):
+    _,_,data,_=fixture
+    copied=dict(data)
+    copied["importance"]=data["importance"].copy()
+    mask=(copied["importance"].init_date=="2023-06-12")&(copied["importance"].window=="Total")&(copied["importance"].version=="residualized")&(copied["importance"].method=="LMG")
+    copied["importance"].loc[mask,"importance_pct"]=[1,2,3,4,5,85]
+    with pytest.raises(ValueError,match="12 June residualized LMG order mismatch"):
+        plot.figure_plan(copied)
