@@ -313,7 +313,7 @@ def pdf_importance_qc(path):
         vector = bool(lines) and not page.get_images() and all(f[2] != 'Type3' for f in fonts)
         percentages = re.findall(r'\d+\.\d%', '\n'.join(t for t, _ in lines))
         # Expect 48 LMG/Johnson percent value labels and 24 LOFO decimal labels.
-        numeric_decimal = re.findall(r'(?<![\\d.])\\d+\\.\\d{3}(?!\\d)', '\\n'.join(t for t, _ in lines))
+        numeric_decimal = re.findall(r'(?<![\d.])\d+\.\d{3}(?!\d)', '\n'.join(t for t, _ in lines))
         minimum = float(min(sizes)) if sizes else 0.0
         return {'pdf_min_font_pt': minimum, 'pdf_embedded_fonts': embedded,
                 'pdf_editable_vector_text': vector, 'pdf_percentage_labels': len(percentages),
