@@ -217,3 +217,12 @@ This isolated branch starts from `dev/jgr-major-revision` and imports audited PR
 - **Provenance:** `SOURCE_COMMIT` points to original historical MLR method definition, not to HPC HEAD. This branch never overwrites historical outputs. Use a **fresh** `MLR_OUTPUT_ROOT` rather than `mlr_raw_residual_comparison` already used by PR #12. Historical raw-versus-residualized numerical comparisons remain in source for audit; the figure notebook exports only four residualized plots. Genuine HPC results, actual figure appearance, and PDF font checks remain to be evaluated on HPC.
 
 Run order: first `mlr_raw_residual_comparison.ipynb` to generate and audit model tables in a **new** output root, then `mlr_comparison_figures.ipynb` with the same root. Both notebooks use precomputed HPC stage CSVs, not GRIB files. The independent plot renderer does not refit models. Check the new `qc/figure_lofo_deltaR2_v1_qc.json` and `qc/table_figure_lofo_deltaR2_v1_manifest.csv`, and send genuine PNG/PDF for final review.
+
+
+### Fig.4/10 label-placement microrevision (v2)
+
+- The new files are `Fig4_Total_residualized_lofo_deltaR2_v2.png/.pdf` and `Fig10_June14_17_residualized_lofo_deltaR2_v2.png/.pdf`. Earlier v1 files are preserved verbatim; the official Fig.3/9 v1 output is not rerendered or overwritten by this notebook's export cell.
+- If a short bar has enough room to the right for its actual rendered value label plus clearance, the label stays outside. If not, the label is centered within the colored bar. No white label background covers a bar endpoint. Bar length, numeric x scale and actual model importance are never modified.
+- Positive `0 < ΔR² < 0.0005` values are displayed as `<0.001` rather than `0.000`; source values remain unchanged.
+- Every bar/label pair is checked in rendered pixels by `importance_label_placement_qc`. Revisions fail on any label extending outside an inside bar, or overlap with a bar tip when outside. All earlier alignment, text-collision, PDF vector text/font and SHA checks remain active.
+- Execute the updated `mlr_comparison_figures.ipynb` with `MLR_OUTPUT_ROOT` pointing to the verified computed tables. It constructs all figures for analysis, but exports **only Fig.4 and Fig.10 v2** to avoid duplicate v1 export failures. The new QC outputs are `qc/figure_lofo_deltaR2_v2_qc.json` and `qc/table_figure_lofo_deltaR2_v2_manifest.csv`. No rerun of MLR is needed for this styling change.
