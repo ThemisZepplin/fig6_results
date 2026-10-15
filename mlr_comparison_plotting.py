@@ -66,6 +66,20 @@ def load_results(output_root):
         if hashlib.sha256(path.read_bytes()).hexdigest() != manifest['table_sha256'][name]:
             raise ValueError(f'Table changed after computation QC: {path}; rerun calculation/QC')
         data[key] = pd.read_csv(path)
+    # The official original-delta table is independently hashed and must agree
+    # with the legacy comparison CSV's unnormalized raw_value column.
+    lofo_name='table_mlr_lofo_original_delta_r2_residualized.csv'
+    lofo_path=root/'tables'/lofo_name
+    if lofo_name not in manifest.get('table_sha256',{}):
+        raise ValueError('Missing audited original LOFO output hash; rerun new calculation notebook')
+    if hashlib.sha256(lofo_path.read_bytes()).hexdigest()!=manifest['table_sha256'][lofo_name]:
+        raise ValueError('Original LOFO table changed after computation QC')
+    documented=pd.read_csv(lofo_path)
+    primary=data['importance'].query("method=='LOFO' and version=='residualized'")
+    compare=primary.merge(documented,on=['init_date','window','predictor','position'],
+                          validate='one_to_one',suffixes=('','_audit'))
+    if len(compare)!=48 or not np.allclose(compare.raw_value,compare.lofo_delta_r2,atol=1e-10,rtol=0):
+        raise ValueError('Figure LOFO values differ from saved raw-delta audit')
     s, f, i = data['summary'], data['fitted'], data['importance']
     if len(s) != 16 or len(f) != 16 * 51 or len(i) != 16 * 18:
         raise ValueError('Incomplete 16-model result set')
