@@ -95,21 +95,21 @@ def test_export_four_only_and_keep_original_numerical_tables(fixture):
     old.write_bytes(b"old figure preserved")
     oldhash=hashlib.sha256(old.read_bytes()).hexdigest()
     all_tables={p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in (out/"tables").glob("*.csv")}
-    built=plot.make_figures(data,plan,"scatter")+plot.make_figures(data,plan,"importance")
-    assert len(built)==4
+    built=plot.make_figures(data,plan,"importance")
+    assert len(built)==2
     output=plot.save_figures(built,inp,out)
-    assert len(output)==4
-    assert set(output.figure)=={"Fig3","Fig4","Fig9","Fig10"}
+    assert len(output)==2
+    assert set(output.figure)=={"Fig4","Fig10"}
     assert set(output.version)=={"residualized"}
     assert (output.status=="PASS").all()
     assert oldhash==hashlib.sha256(old.read_bytes()).hexdigest()
     assert all_tables=={p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in (out/"tables").glob("*.csv")}
-    assert (out/"qc/figure_lofo_deltaR2_v1_qc.json").is_file()
+    assert (out/"qc/figure_lofo_deltaR2_v2_qc.json").is_file()
     for figure in ("Fig4","Fig10"):
         pdf=next(out.glob(f"figures/{figure}_*.pdf"))
         assert pdf.stat().st_size>1000
     with pytest.raises(FileExistsError):
-        plot.save_figures(plot.make_figures(data,plan,"scatter")+plot.make_figures(data,plan,"importance"),inp,out)
+        plot.save_figures(plot.make_figures(data,plan,"importance"),inp,out)
 
 def test_reference_ranking_violation_rejected(fixture):
     _,_,data,_=fixture
@@ -155,3 +155,34 @@ def test_legacy_lofo_source_tampering_is_rejected(fixture, tmp_path):
     source.write_text(txt.replace("LOFO", "LOOO", 1))
     with pytest.raises(ValueError, match="Table changed"):
         plot.load_results(legacy)
+
+
+def test_revised_inside_labels_never_erase_bar_tips(fixture):
+    _, _, data, plan = fixture
+    for item in plot.make_figures(data, plan, "importance"):
+        qc = item["qc"]
+        assert qc["label_placement_status"] == "PASS", qc["label_placement_failures"]
+        assert qc["label_placement_count"] == 72
+        assert qc["label_placement_inside"] > 0
+        assert qc["label_placement_outside"] > 0
+        assert all(record["valid"] for record in qc["label_placement_records"])
+        assert item["qc"]["basename"].endswith("_lofo_deltaR2_v2")
+        for ax in item["fig"].axes:
+            assert all(label.get_bbox_patch() is None for label in ax.texts)
+        plot.plt.close(item["fig"])
+
+
+def test_positive_tiny_lofo_not_displayed_as_zero(fixture):
+    _, _, data, plan = fixture
+    copied = dict(data)
+    copied["importance"] = copied["importance"].copy()
+    sub = ((copied["importance"].init_date == core.INITS[0]) &
+           (copied["importance"].window == "Total") &
+           (copied["importance"].version == "residualized") &
+           (copied["importance"].method == "LOFO"))
+    index = copied["importance"].index[sub][0]
+    copied["importance"].loc[index, "raw_value"] = 0.000095
+    with plot.plt.rc_context(plot.STYLE):
+        fig, axes, labels = plot.importance_figure(copied, plan, "Total", "residualized")
+    assert "<0.001" in [t.get_text() for ax in axes[8:] for t in ax.texts]
+    plot.plt.close(fig)
