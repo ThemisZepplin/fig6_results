@@ -444,13 +444,15 @@ def pdf_importance_qc(path):
         percentages = re.findall(r'\d+\.\d%', '\n'.join(t for t, _ in lines))
         # Expect 48 LMG/Johnson percent value labels and 24 LOFO decimal labels.
         numeric_decimal = re.findall(r'(?<![\d.])\d+\.\d{3}(?!\d)', '\n'.join(t for t, _ in lines))
+        subthreshold_labels = re.findall(r'<0\.001', '\n'.join(t for t, _ in lines))
         minimum = float(min(sizes)) if sizes else 0.0
         return {'pdf_min_font_pt': minimum, 'pdf_embedded_fonts': embedded,
                 'pdf_editable_vector_text': vector, 'pdf_percentage_labels': len(percentages),
                 'pdf_lofo_decimal_labels':len(numeric_decimal),
+                'pdf_lofo_subthreshold_labels':len(subthreshold_labels),
                 'pdf_text_collisions': collisions, 'pdf_clipped_text': clipped,
                 'pdf_status': 'PASS' if minimum >= 7.5 and embedded and vector and
-                len(percentages) >= 48 and len(numeric_decimal) >= 24 and not clipped and not collisions else 'FAIL'}
+                len(percentages) >= 48 and len(numeric_decimal)+len(subthreshold_labels) >= 24 and not clipped and not collisions else 'FAIL'}
 
 
 def make_figures(data, plan, kind):
