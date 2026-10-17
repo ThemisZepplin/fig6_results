@@ -26,7 +26,7 @@ STYLE = {"font.family": "sans-serif", "font.sans-serif": ["Arial", "DejaVu Sans"
 FIGURE_IDS = {"Total": (3, 4, "Total"), "Stage-I": (9, 10, "June14_17")}
 FIGURE_VERSION = "residualized"
 FIGURE_REVISION = "lofo_deltaR2_v1"
-IMPORTANCE_REVISION = "lofo_deltaR2_v4"  # Preserve PDF text extraction under halo; Fig3/9 preserve v1
+IMPORTANCE_REVISION = "lofo_deltaR2_v5"  # Bottom x-axis spine; v4 halo/PDF extraction and Fig3/9 v1 unchanged
 INSIDE_LABEL_HALO_PT = 0.6
 
 
@@ -284,14 +284,19 @@ def importance_figure(data, plan, window, version):
             ax.set_xlim(0, plan['bars'][method])
             ax.set_title(f'({chr(97+row*4+col)}) {pd.Timestamp(init).day} Jun', loc='left', fontsize=9.0, pad=7)
             _base(ax, bars=True)
-            for side in ('top', 'right', 'bottom'):
+            # Fig.4 / Fig.10: retain a real, light bottom axis for the
+            # numerical importance ticks; do not restore a four-sided box.
+            for side in ('top', 'right', 'left'):
                 ax.spines[side].set_visible(False)
-            ax.spines['left'].set_color('0.80')
-            ax.spines['left'].set_linewidth(0.6)
+            ax.spines['bottom'].set_visible(True)
+            ax.spines['bottom'].set_linewidth(0.8)
+            ax.spines['bottom'].set_color('0.25')
             # Same method uses the same numeric ticks in all four init panels.
             # Never allow MaxNLocator to draw an out-of-range 90/0.6 tick.
             ax.set_xticks(_safe_importance_xticks(plan['bars'][method]))
-            ax.tick_params(axis='x',bottom=True,labelbottom=True,labelsize=8)
+            ax.tick_params(axis='x', which='both', bottom=True, top=False,
+                           labelbottom=True, labelsize=8, direction='out',
+                           length=3.0, width=0.8, color='0.25')
             for y, v in enumerate(vals):
                 # Preserve positive sub-0.0005 values instead of rounding to 0.000.
                 label = (('<0.001' if 0 < v < 0.0005 else f'{v:.3f}')
