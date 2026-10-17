@@ -84,6 +84,9 @@ FONT_AXIS_LABEL = 9.5
 FONT_TICK = 8.7
 FONT_LEGEND = 8.4
 FONT_ANNOTATION = 8.3
+STAGE_DISPLAY_LABELS = {"Stage-I": "6.14–17", "Total": "Total"}
+FONT_DIAMOND_LEGEND = 7.2
+TIMESERIES_COLORS = {"ERA5": "black", "S2S": "royalblue", "interval": "deepskyblue"}
 BIAS_COLOR = "#5B8FD9"
 RMSE_COLOR = "#80B36A"
 BAR_ALPHA = 0.86
@@ -124,7 +127,7 @@ def _apply_axis_style(ax, grid_axis="y"):
     ax.set_axisbelow(True)
 
 
-def _add_panel_heading(ax, letter, title):
+def _add_panel_heading(ax, letter, title=None):
     """Place a consistent bold panel letter and regular short title above an axis."""
     ax.text(
         0.0,
@@ -138,6 +141,8 @@ def _add_panel_heading(ax, letter, title):
         clip_on=False,
         zorder=20,
     )
+    if title is None:
+        return
     ax.text(
         0.105,
         1.025,
@@ -417,14 +422,18 @@ def _write_fig2_caption(path):
         "Figure 2. Evolution and multi-initialization verification of regional maximum 2-m "
         "temperature (Tmax) over North China. (a) Daily ERA5 Tmax and the 51-member S2S "
         "ensemble mean for the forecast initialized on 12 June 2023, with the 25th–75th and "
-        "5th–95th ensemble-percentile ranges shown by shading. The vertical line marks the end "
-        "of Stage-I. (b) Ensemble-mean RMSE (upper) and signed Bias (lower) for forecasts "
-        "initialized on 1, 5, 8, and 12 June, evaluated for Stage-I (14–17 June) and the Total "
-        "period (14–24 June). (c) Member-wise RMSE distributions for Stage-I (upper) and the "
-        "Total period (lower) for the same initialization dates. All daily quantities follow "
+        "5th–95th ensemble-percentile ranges shown by shading. The vertical line marks the "
+        "boundary between 17 and 18 June. (b) Ensemble-mean RMSE for forecasts initialized "
+        "on 1, 5, 8, and 12 June, evaluated for 14–17 June and the Total period (14–24 June). "
+        "(c) Member-wise RMSE distributions for the same four initializations over the Total "
+        "period (14–24 June). (d) Signed ensemble-mean Bias for the same four initializations "
+        "over 14–17 June and the Total period. (e) Member-wise RMSE distributions for the same "
+        "four initializations over 14–17 June. All daily quantities follow "
         "the upstream Beijing-time (UTC+8) processing. Each box contains n = 51 member RMSE "
-        "values; boxes span the 25th–75th percentiles, center lines denote medians, whiskers "
-        "extend to 1.5 times the interquartile range, and gray points show all members. Black "
+        "values; boxes span the 25th–75th percentiles, center lines denote medians. "
+        "Whiskers extend to the most extreme observations within 1.5 interquartile ranges "
+        "below the first quartile and above the third quartile. "
+        "Gray points show all members. Black "
         "diamonds denote the RMSE of the ensemble-mean forecast, calculated after first taking "
         "the daily mean across the 51 members, rather than the mean or median of member-wise RMSE."
     )
@@ -470,7 +479,7 @@ def _stage_metric_lookup(stage_df, metric):
     return values
 
 
-def _draw_grouped_stage_bars(ax, metric_values, metric, show_stage_labels):
+def _draw_grouped_stage_bars(ax, metric_values, metric):
     stage_order = ["Stage-I", "Total"]
     group_centers = np.array([0.0, 1.25])
     bar_width = 0.16
@@ -482,41 +491,25 @@ def _draw_grouped_stage_bars(ax, metric_values, metric, show_stage_labels):
     if metric == "rmse":
         upper = max(0.5, float(np.max(all_values)))
         ax.set_ylim(0.0, upper * 1.24)
-        ax.set_ylabel("Ensemble-mean RMSE (°C)", fontsize=FONT_AXIS_LABEL)
-        _add_internal_axis_title(ax, "RMSE")
+        ax.set_ylabel("RMSE (°C)", fontsize=FONT_AXIS_LABEL)
     else:
         lower = min(0.0, float(np.min(all_values)))
         upper = max(0.0, float(np.max(all_values)))
         span = max(upper - lower, 0.5)
         ax.set_ylim(lower - 0.20 * span, upper + 0.16 * span)
         ax.axhline(0, color="0.18", lw=0.9)
-        ax.set_ylabel("Ensemble-mean bias (°C)", fontsize=FONT_AXIS_LABEL)
-        _add_internal_axis_title(ax, "Signed bias")
+        ax.set_ylabel("Bias (°C)", fontsize=FONT_AXIS_LABEL)
 
-    label_offset = 0.028 * (ax.get_ylim()[1] - ax.get_ylim()[0])
     for init_index, init in enumerate(INIT_ORDER):
         positions = group_centers + offsets[init_index]
         values = np.array([metric_values[(stage, init)] for stage in stage_order], dtype=float)
-        bars = ax.bar(
+        ax.bar(
             positions, values, width=bar_width, color=INIT_COLORS[init], alpha=BAR_ALPHA,
             edgecolor=EDGE_COLOR, linewidth=EDGE_LW, zorder=3,
         )
-        for bar, value in zip(bars, values):
-            direction = 1 if value >= 0 else -1
-            text = f"{value:.2f}" if metric == "rmse" else _format_signed_without_plus(value)
-            ax.text(
-                bar.get_x() + bar.get_width() / 2,
-                value + direction * label_offset,
-                text,
-                ha="center",
-                va="bottom" if value >= 0 else "top",
-                fontsize=6.7,
-                rotation=90,
-                zorder=5,
-            )
     ax.set_xlim(group_centers[0] - 0.52, group_centers[-1] + 0.52)
     ax.set_xticks(group_centers)
-    ax.set_xticklabels(stage_order if show_stage_labels else [])
+    ax.set_xticklabels([STAGE_DISPLAY_LABELS[stage] for stage in stage_order])
     ax.tick_params(axis="x", which="both", length=0)
     _apply_axis_style(ax, grid_axis="y")
 
@@ -570,9 +563,9 @@ def _draw_member_rmse_boxes(ax, member_df, stage_df, stage, y_upper, seed):
         )
     ax.set_ylim(0.0, y_upper)
     ax.set_xticks(positions, [INIT_LABELS[init] for init in INIT_ORDER])
-    ax.set_ylabel("Member-wise RMSE (°C)", fontsize=FONT_AXIS_LABEL)
+    ax.set_ylabel("")
     _apply_axis_style(ax, grid_axis="y")
-    _add_internal_axis_title(ax, stage)
+    _add_internal_axis_title(ax, STAGE_DISPLAY_LABELS[stage])
     return data
 
 
@@ -606,40 +599,43 @@ def render_merged_fig2_from_csv(
     with plt.rc_context(PAPER_RC_PARAMS):
         fig = plt.figure(figsize=(FIG_WIDTH_IN, MERGED_FIG2_HEIGHT_IN), constrained_layout=False)
         outer_gs = fig.add_gridspec(
-            4, 1, height_ratios=[1.42, 0.13, 0.13, 2.15], hspace=0.27,
+            3, 1, height_ratios=[1.42, 0.40, 2.65], hspace=0.25,
         )
-        lower_gs = outer_gs[3].subgridspec(
-            2, 2, height_ratios=[1.0, 1.0], width_ratios=[1.0, 1.08],
-            hspace=0.54, wspace=0.36,
+        legend_gs = outer_gs[1].subgridspec(2, 1, hspace=0.08)
+        lower_gs = outer_gs[2].subgridspec(
+            3, 2, height_ratios=[1.0, 0.48, 1.22], width_ratios=[1.0, 1.08],
+            hspace=0.0, wspace=0.43,
         )
         ax_ts = fig.add_subplot(outer_gs[0])
-        ax_ts_legend = fig.add_subplot(outer_gs[1])
-        ax_init_legend = fig.add_subplot(outer_gs[2])
+        ax_ts_legend = fig.add_subplot(legend_gs[0])
+        ax_init_legend = fig.add_subplot(legend_gs[1])
         ax_rmse_bar = fig.add_subplot(lower_gs[0, 0])
-        ax_bias_bar = fig.add_subplot(lower_gs[1, 0], sharex=ax_rmse_bar)
-        ax_box_stage1 = fig.add_subplot(lower_gs[0, 1])
-        ax_box_total = fig.add_subplot(lower_gs[1, 1], sharex=ax_box_stage1, sharey=ax_box_stage1)
+        ax_bias_bar = fig.add_subplot(lower_gs[2, 0], sharex=ax_rmse_bar)
+        ax_box_total = fig.add_subplot(lower_gs[0, 1])
+        ax_box_stage1 = fig.add_subplot(lower_gs[2, 1], sharex=ax_box_total, sharey=ax_box_total)
+        ax_diamond_legend = fig.add_subplot(lower_gs[1, 1])
+        # Keep all data and legend axes within the fixed canvas.
+        fig.subplots_adjust(left=0.10, right=0.975, top=0.95, bottom=0.075)
 
-        forecast_color = INIT_COLORS[init_for_timeseries]
         ax_ts.axvline(pd.Timestamp("2023-06-17 12:00"), color="0.25", lw=0.9, zorder=2)
         p0595 = ax_ts.fill_between(
-            sub["date"], sub["ens_p05"], sub["ens_p95"], color=forecast_color,
+            sub["date"], sub["ens_p05"], sub["ens_p95"], color=TIMESERIES_COLORS["interval"],
             alpha=0.14, lw=0, label="S2S p05–p95", zorder=1,
         )
         p2575 = ax_ts.fill_between(
-            sub["date"], sub["ens_p25"], sub["ens_p75"], color=forecast_color,
+            sub["date"], sub["ens_p25"], sub["ens_p75"], color=TIMESERIES_COLORS["interval"],
             alpha=0.30, lw=0, label="S2S p25–p75", zorder=1,
         )
         era5_line, = ax_ts.plot(
-            sub["date"], sub["ERA5_Tmax"], color="black", lw=1.75,
+            sub["date"], sub["ERA5_Tmax"], color=TIMESERIES_COLORS["ERA5"], lw=1.75,
             marker="o", ms=4.1, label="ERA5", zorder=3,
         )
         s2s_line, = ax_ts.plot(
-            sub["date"], sub["S2S_ensmean_Tmax"], color=forecast_color, lw=1.65,
+            sub["date"], sub["S2S_ensmean_Tmax"], color=TIMESERIES_COLORS["S2S"], lw=1.65,
             marker="s", ms=4.1, label="S2S ensemble mean (06-12)", zorder=3,
         )
         annotation = "\n".join(
-            f"{stage} RMSE = {float(stage_rows[stage]['ensmean_rmse']):.2f}°C"
+            f"{STAGE_DISPLAY_LABELS[stage]} RMSE = {float(stage_rows[stage]['ensmean_rmse']):.2f}°C"
             for stage in stages
         )
         ax_ts.text(
@@ -648,7 +644,7 @@ def render_merged_fig2_from_csv(
             bbox=dict(facecolor="white", alpha=0.74, edgecolor="none", boxstyle="round,pad=0.20"),
             zorder=15,
         )
-        _add_panel_heading(ax_ts, "a", "Tmax evolution (06-12 initialization)")
+        _add_panel_heading(ax_ts, "a")
         ax_ts.set_ylabel("Daily Tmax (°C)", fontsize=FONT_AXIS_LABEL)
         ax_ts.set_xlim(pd.Timestamp("2023-06-13 12:00"), pd.Timestamp("2023-06-24 12:00"))
         ax_ts.xaxis.set_major_locator(mdates.DayLocator(interval=1))
@@ -670,30 +666,39 @@ def render_merged_fig2_from_csv(
             for init in INIT_ORDER
         ]
         ax_init_legend.legend(
-            handles=init_handles, title="Initialization date", loc="center", ncol=4,
-            fontsize=FONT_LEGEND, title_fontsize=FONT_LEGEND, frameon=False,
+            handles=init_handles, loc="center", ncol=4,
+            fontsize=FONT_LEGEND, frameon=False,
             handlelength=1.25, columnspacing=1.0, handletextpad=0.4,
         )
 
-        _draw_grouped_stage_bars(ax_rmse_bar, rmse_metrics, "rmse", show_stage_labels=False)
-        _draw_grouped_stage_bars(ax_bias_bar, bias_metrics, "bias", show_stage_labels=True)
-        _add_panel_heading(ax_rmse_bar, "b", "Ensemble-mean error metrics")
+        _draw_grouped_stage_bars(ax_rmse_bar, rmse_metrics, "rmse")
+        _draw_grouped_stage_bars(ax_bias_bar, bias_metrics, "bias")
+        ax_rmse_bar.tick_params(axis="x", labelbottom=True)
+        ax_bias_bar.tick_params(axis="x", labelbottom=True)
+        _add_panel_heading(ax_rmse_bar, "b")
+        _add_panel_heading(ax_bias_bar, "d")
 
-        _draw_member_rmse_boxes(
-            ax_box_stage1, member_df, stage_df, "Stage-I", member_y_upper, seed=20240612,
-        )
         _draw_member_rmse_boxes(
             ax_box_total, member_df, stage_df, "Total", member_y_upper, seed=20240613,
         )
-        _add_panel_heading(ax_box_stage1, "c", "Member RMSE distributions")
+        _draw_member_rmse_boxes(
+            ax_box_stage1, member_df, stage_df, "Stage-I", member_y_upper, seed=20240612,
+        )
+        _add_panel_heading(ax_box_total, "c")
+        _add_panel_heading(ax_box_stage1, "e")
         diamond = Line2D([], [], marker="D", linestyle="None", color="black", markersize=4.2)
-        ax_box_stage1.legend(
-            [diamond], ["Ensemble-mean RMSE"], loc="upper left",
-            bbox_to_anchor=(0.01, 0.87), fontsize=FONT_LEGEND - 0.7,
+        ax_diamond_legend.axis("off")
+        ax_diamond_legend.legend(
+            [diamond], ["Ensemble-mean RMSE"], loc="center",
+            bbox_to_anchor=(0.5, 0.40), fontsize=FONT_DIAMOND_LEGEND,
             frameon=False, handletextpad=0.3, borderaxespad=0.0,
         )
 
-        fig.subplots_adjust(left=0.10, right=0.975, top=0.95, bottom=0.075)
+        box_top = ax_box_total.get_position()
+        box_bottom = ax_box_stage1.get_position()
+        fig.text(box_top.x0 - 0.067, (box_top.y1 + box_bottom.y0) / 2,
+                 "RMSE (°C)", rotation=90, ha="center", va="center",
+                 fontsize=FONT_AXIS_LABEL)
         png_path = Path(out_dir) / MERGED_FIG2_PNG.name
         pdf_path = Path(out_dir) / MERGED_FIG2_PDF.name
         canvas_qc = _save_fixed_canvas(fig, png_path, pdf_path)
@@ -715,7 +720,8 @@ def render_merged_fig2_from_csv(
         "validation": validation_df.copy(),
         "member_counts": member_counts,
         "member_y_upper": member_y_upper,
-        "panel_count": 3,
+        "panel_count": 5,
+        "panel_labels": "a,b,c,d,e",
         "plot_axis_count": 5,
     }
 
@@ -925,12 +931,18 @@ def _write_merged_fig2_qc(path, result):
         **result["canvas_qc"],
         "panel_count": result["panel_count"],
         "plot_axis_count": result["plot_axis_count"],
-        "panel_labels": "a,b,c",
+        "panel_labels": result["panel_labels"],
+        "panel_mapping": "a: daily Tmax, init 2023-06-12; b: ensemble-mean RMSE, 14–17 June/Total; c: member-wise RMSE, Total; d: ensemble-mean Bias, 14–17 June/Total; e: member-wise RMSE, 14–17 June",
+        "legend_axes_counted_as_panels": False,
         "source_csvs": "; ".join(
             map(str, [FIG2_DAILY_CSV, FIG2_MEMBER_CSV, FIG2_STAGE_CSV])
         ),
         "init_order": ",".join(INIT_ORDER),
         "stage_order": "Stage-I,Total",
+        "bar_value_labels": False,
+        "bar_group_order": "Stage-I,Total (display: 6.14–17,Total)",
+        "boxplot_top_to_bottom": "Total,Stage-I (display: Total,6.14–17)",
+        "stage_display_labels": str(STAGE_DISPLAY_LABELS),
         "Stage-I dates": "2023-06-14 to 2023-06-17 (BJT)",
         "Stage-I n_days": EXPECTED_NDAYS["Stage-I"],
         "Total dates": "2023-06-14 to 2023-06-24 (BJT)",
@@ -942,6 +954,14 @@ def _write_merged_fig2_qc(path, result):
         "black_diamond_definition": "RMSE of ensemble-mean forecast",
         "validation_tolerance_C": "atol=1e-6, rtol=0",
         "visual_collision_check": "manual check required after rendering",
+        "timeseries_colors": str(TIMESERIES_COLORS),
+        "timeseries_interval_alpha": "p25-p75=0.30; p05-p95=0.14",
+        "member_rmse_ylabel": "single RMSE (°C), vertically centered left of both boxplot rows",
+        "diamond_legend_location": "dedicated inter-row axis, below Total date labels and above 6.14–17",
+        "diamond_legend_font_pt": FONT_DIAMOND_LEGEND,
+        "central_legends": "two compact horizontal rows; no initialization title; dedicated nested GridSpec",
+        "expected_merged_png_size_px": "3900 x 3840",
+        "visual_layout_qc": "manual inspection required after actual rendering: window order, tick labels, legend spacing, occlusion and clipping; no automatic visual validation",
     }
     for row in validation_df.itertuples(index=False):
         prefix = f"{row.init}|{row.stage}"
