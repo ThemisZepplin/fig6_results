@@ -54,10 +54,17 @@ def test_synthetic_panel_counts_alignment_text_and_boundary():
             assert len(heading_boxes)==2
             assert legend_box.y1 < min(box.y0 for box in heading_boxes)
             assert legend_box.y0 > max(ax.get_window_extent(renderer).y1 for ax in axes)
+            heading_gap=min(box.y0 for box in heading_boxes)-legend_box.y1
+            panel_gap=legend_box.y0-max(ax.get_window_extent(renderer).y1 for ax in axes)
+            assert heading_gap < .8*panel_gap
             assert all(abs((heading.x0+heading.x1-panel.x0-panel.x1)/2)<1
                        for heading,panel in zip(heading_boxes,panel_boxes))
-            assert abs(legend_box.x0-panel_boxes[0].x0)<1
-            assert abs(legend_box.x1-panel_boxes[1].x1)<1
+            combined_center=(panel_boxes[0].x0+panel_boxes[1].x1)/2
+            legend_center=(legend_box.x0+legend_box.x1)/2
+            assert abs(legend_center-combined_center)<1
+            assert legend_box.width < .75*(panel_boxes[1].x1-panel_boxes[0].x0)
+            assert legend_box.x0 > panel_boxes[0].x0
+            assert legend_box.x1 < panel_boxes[1].x1
             if window=='Stage-I':assert all(len(a.patches)==1 for a in axes)
             plt.close(fig)
 

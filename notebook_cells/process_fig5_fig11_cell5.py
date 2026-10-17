@@ -89,12 +89,14 @@ def legend(fig, reference=True, position='bottom', span=None):
         if left >= right:
             raise ValueError('Invalid panel-span bounds for top legend')
         location = 'center'
-        anchor = (left, 0.89, right - left, 0.05)
-        mode = 'expand'
+        anchor = (0.5 * (left + right), 0.925)
+        mode = None
+        column_spacing = 2.0
     elif position == 'bottom':
         location = 'lower center'
         anchor = (0.5, 0.005)
         mode = None
+        column_spacing = 2.0
     else:
         raise ValueError('Legend position must be top or bottom')
 
@@ -107,6 +109,7 @@ def legend(fig, reference=True, position='bottom', span=None):
         fontsize=8,
         borderaxespad=0,
         mode=mode,
+        columnspacing=column_spacing,
     )
 
 
@@ -482,8 +485,8 @@ def timeseries_figure(
     )
 
     # Derive every top-row alignment from the actual subplot boxes. This keeps
-    # the two date headings centered over their columns and makes the shared
-    # legend span exactly the same horizontal range as both subplot columns.
+    # the two date headings centered over their columns and the compact shared
+    # legend centered over the combined width of both subplot columns.
     left_panel = axes[0, 0].get_position()
     right_panel = axes[0, 1].get_position()
     column_centers = (
@@ -494,7 +497,7 @@ def timeseries_figure(
     for col, init in enumerate(inits):
         fig.text(
             column_centers[col],
-            0.965,
+            0.955,
             pd.Timestamp(init).strftime('%d June %Y'),
             ha='center',
             fontsize=10,
