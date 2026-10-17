@@ -1,3 +1,7 @@
+## Fig.4/Fig.10 bottom x-axis revision (v5)
+
+This styling-only revision restores a visible bottom spine in all 12 LMG, Johnson, and LOFO importance subpanels. Its line is 0.8 pt in gray 0.25; numerical bottom ticks remain outward and visible. Top/right/left spines remain hidden (no four-sided box). Bar lengths, percentage and ΔR² labels, ordering, typography, 0.6-pt white halo and native PDF text extraction are unchanged. Fig.3 and Fig.9 scatter renderers are unchanged. Outputs use `lofo_deltaR2_v5` filenames and corresponding QC/manifest, preserving the previous v4 results; use the updated `mlr_comparison_figures.ipynb` with a restarted kernel. The corresponding synthetic axis assertions are in `tests/test_mlr_comparison_plotting.py`. Real HPC figure exports and PDF QA remain to be rerun.
+
 # Final MLR raw versus residualized comparison
 
 PDF QA compatibility revision (v4): the initial v3 white-stroke text path effect
