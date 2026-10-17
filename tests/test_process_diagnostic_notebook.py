@@ -14,6 +14,14 @@ ROOT=Path(__file__).resolve().parents[1]
 def nb():return json.loads((ROOT/'process_fig5_fig11_diagnostic_standalone.ipynb').read_text())
 
 
+def test_cell5_matches_copy_safe_python_source():
+    source=''.join(nb()['cells'][4]['source'])
+    copy_source=(ROOT/'notebook_cells'/'process_fig5_fig11_cell5.py').read_text()
+    assert source==copy_source
+    assert '<' not in source
+    ast.parse(source)
+
+
 def test_selfcontained_and_explicit_diagnostic_contract():
     n=nb();assert len(n['cells'])==6
     whole=''.join(''.join(c['source']) for c in n['cells'])
@@ -238,7 +246,7 @@ def test_era5_ncvi_is_in_all_physical_and_missing_curve_is_fatal():
     fig=''.join(nb()['cells'][4]['source'])
     assert 'all_physical=pd.concat([all_physical,era5_ncvi_long]' in source
     assert "hashes['era5_ncvi']" in source
-    assert "if factor=='NCVI_concurrent':" in fig
+    assert "if factor == 'NCVI_concurrent':" in fig
     assert 'Mandatory ERA5 NCVI reference missing' in fig
     assert "'era5_ncvi_source_qc':era5_ncvi_audit" in ''.join(nb()['cells'][5]['source'])
 
