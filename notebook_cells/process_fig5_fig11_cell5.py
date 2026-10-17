@@ -67,7 +67,7 @@ def limits(values):
     return (float(ticks[0]), float(ticks[-1])), ticks
 
 
-def legend(fig, reference=True, position='bottom'):
+def legend(fig, reference=True, position='bottom', span=None):
     names = ('ERA5', *GROUPS) if reference else GROUPS
     handles = [
         Line2D(
@@ -83,11 +83,18 @@ def legend(fig, reference=True, position='bottom'):
     ]
 
     if position == 'top':
-        location = 'upper center'
-        anchor = (0.5, 0.935)
+        if span is None:
+            raise ValueError('Top legend requires panel-span bounds')
+        left, right = span
+        if left >= right:
+            raise ValueError('Invalid panel-span bounds for top legend')
+        location = 'center'
+        anchor = (left, 0.89, right - left, 0.05)
+        mode = 'expand'
     elif position == 'bottom':
         location = 'lower center'
         anchor = (0.5, 0.005)
+        mode = None
     else:
         raise ValueError('Legend position must be top or bottom')
 
@@ -99,6 +106,7 @@ def legend(fig, reference=True, position='bottom'):
         bbox_to_anchor=anchor,
         fontsize=8,
         borderaxespad=0,
+        mode=mode,
     )
 
 
@@ -463,9 +471,29 @@ def timeseries_figure(
             if window == 'Total':
                 ax.tick_params(axis='y', labelsize=8)
 
+    # Keep the original panel height after moving the shared legend upward.
+    fig.subplots_adjust(
+        left=0.15,
+        right=0.98,
+        top=0.88,
+        bottom=0.085 if window == 'Total' else 0.06,
+        wspace=0.24,
+        hspace=0.23 if window == 'Total' else 0.43,
+    )
+
+    # Derive every top-row alignment from the actual subplot boxes. This keeps
+    # the two date headings centered over their columns and makes the shared
+    # legend span exactly the same horizontal range as both subplot columns.
+    left_panel = axes[0, 0].get_position()
+    right_panel = axes[0, 1].get_position()
+    column_centers = (
+        0.5 * (left_panel.x0 + left_panel.x1),
+        0.5 * (right_panel.x0 + right_panel.x1),
+    )
+
     for col, init in enumerate(inits):
         fig.text(
-            0.345 if col == 0 else 0.79,
+            column_centers[col],
             0.965,
             pd.Timestamp(init).strftime('%d June %Y'),
             ha='center',
@@ -477,16 +505,7 @@ def timeseries_figure(
         fig,
         reference=bool((data.group == 'ERA5').any()),
         position='top',
-    )
-
-    # Keep the original panel height after moving the shared legend upward.
-    fig.subplots_adjust(
-        left=0.15,
-        right=0.98,
-        top=0.88,
-        bottom=0.085 if window == 'Total' else 0.06,
-        wspace=0.24,
-        hspace=0.23 if window == 'Total' else 0.43,
+        span=(left_panel.x0, right_panel.x1),
     )
 
     # Thin numeric tick labels only when an expanded range would overlap.
