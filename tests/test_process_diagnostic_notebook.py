@@ -39,6 +39,12 @@ def test_synthetic_panel_counts_alignment_text_and_boundary():
             assert len(axes)==count and fig.get_figwidth()==6.5
             assert fig.get_figheight()*25.4<=228
             assert env['figure_qc'](fig,axes)['text_extent_qc']=='PASS'
+            fig.canvas.draw();renderer=fig.canvas.get_renderer()
+            legend_box=fig.legends[0].get_window_extent(renderer)
+            heading_boxes=[t.get_window_extent(renderer) for t in fig.texts if 'June 2023' in t.get_text()]
+            assert len(heading_boxes)==2
+            assert legend_box.y1 < min(box.y0 for box in heading_boxes)
+            assert legend_box.y0 > max(ax.get_window_extent(renderer).y1 for ax in axes)
             if window=='Stage-I':assert all(len(a.patches)==1 for a in axes)
             plt.close(fig)
 
@@ -68,6 +74,8 @@ def test_scatter_layout_and_explicit_plot_tables():
         fig.canvas.draw()
         renderer=fig.canvas.get_renderer()
         assert all(t.get_window_extent(renderer).y1 <= fig.bbox.height for t in headings)
+        legend_box=fig.legends[0].get_window_extent(renderer)
+        assert legend_box.y1 < min(ax.get_window_extent(renderer).y0 for ax in axes)
         plt.close(fig)
 
 
