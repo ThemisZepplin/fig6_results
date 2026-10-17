@@ -62,6 +62,23 @@ def test_only_residualized_and_metric_not_normalized(fixture):
             assert all(not label.endswith("%") for label in labels) if method=="LOFO" else all(label.endswith("%") for label in labels)
         plot.plt.close(item["fig"])
 
+def test_fig4_fig10_bottom_spines_only_and_numeric_ticks(fixture):
+    """All LMG / Johnson / LOFO panels show a real bottom baseline, no box."""
+    _, _, data, plan = fixture
+    for item in plot.make_figures(data, plan, "importance"):
+        assert item["qc"]["figure"] in {"Fig4", "Fig10"}
+        assert item["qc"]["basename"].endswith("_lofo_deltaR2_v5")
+        for ax in item["fig"].axes:
+            assert ax.spines["bottom"].get_visible()
+            assert ax.spines["bottom"].get_linewidth() == pytest.approx(0.8)
+            assert ax.spines["bottom"].get_edgecolor() == pytest.approx((.25, .25, .25, 1))
+            assert all(not ax.spines[side].get_visible() for side in ("top", "right", "left"))
+            assert len(ax.get_xticks()) >= 3
+            assert all(t.get_visible() for t in ax.get_xticklabels())
+            assert any(t.tick1line.get_visible() for t in ax.xaxis.get_major_ticks())
+        plot.plt.close(item["fig"])
+
+
 def test_scatter_axes_and_stats(fixture):
     _,_,data,plan=fixture
     items=plot.make_figures(data,plan,"scatter")
@@ -105,7 +122,7 @@ def test_export_four_only_and_keep_original_numerical_tables(fixture):
     assert (output.status=="PASS").all()
     assert oldhash==hashlib.sha256(old.read_bytes()).hexdigest()
     assert all_tables=={p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in (out/"tables").glob("*.csv")}
-    assert (out/"qc/figure_lofo_deltaR2_v4_qc.json").is_file()
+    assert (out/"qc/figure_lofo_deltaR2_v5_qc.json").is_file()
     for figure in ("Fig4","Fig10"):
         pdf=next(out.glob(f"figures/{figure}_*.pdf"))
         assert pdf.stat().st_size>1000
@@ -167,7 +184,7 @@ def test_revised_inside_labels_never_erase_bar_tips(fixture):
         assert qc["label_placement_inside"] > 0
         assert qc["label_placement_outside"] > 0
         assert all(record["valid"] for record in qc["label_placement_records"])
-        assert item["qc"]["basename"].endswith("_lofo_deltaR2_v4")
+        assert item["qc"]["basename"].endswith("_lofo_deltaR2_v5")
         for ax in item["fig"].axes:
             assert all(label.get_bbox_patch() is None for label in ax.texts)
             for label in ax.texts:
