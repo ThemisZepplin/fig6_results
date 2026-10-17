@@ -50,9 +50,14 @@ def test_synthetic_panel_counts_alignment_text_and_boundary():
             fig.canvas.draw();renderer=fig.canvas.get_renderer()
             legend_box=fig.legends[0].get_window_extent(renderer)
             heading_boxes=[t.get_window_extent(renderer) for t in fig.texts if 'June 2023' in t.get_text()]
+            panel_boxes=[axes[index].get_window_extent(renderer) for index in (0,1)]
             assert len(heading_boxes)==2
             assert legend_box.y1 < min(box.y0 for box in heading_boxes)
             assert legend_box.y0 > max(ax.get_window_extent(renderer).y1 for ax in axes)
+            assert all(abs((heading.x0+heading.x1-panel.x0-panel.x1)/2)<1
+                       for heading,panel in zip(heading_boxes,panel_boxes))
+            assert abs(legend_box.x0-panel_boxes[0].x0)<1
+            assert abs(legend_box.x1-panel_boxes[1].x1)<1
             if window=='Stage-I':assert all(len(a.patches)==1 for a in axes)
             plt.close(fig)
 
