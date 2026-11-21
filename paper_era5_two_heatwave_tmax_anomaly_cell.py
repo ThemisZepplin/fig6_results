@@ -19,7 +19,8 @@ ERA5_TMAX_HIST_GLOB_1993_2023 = "/data1/huangy/fig6/NC/ai_test/pangu/era5_T/era5
 ERA5_TMAX_HIST_ROOT_1979_1992 = "/data6/wangsg/ERA5_meso2/monolevel/sfc_1hour/t2m"
 BACKGROUND_YEARS = tuple(range(1979, 2023))
 EVENT_YEAR = 2023
-WINDOWS = {"first": ("06-14", "06-17"), "second": ("06-22", "06-24")}
+WINDOWS = {"first": ("06-14", "06-17"), "second": ("06-14", "06-24")}
+COLORBAR_TICK_STEP = 2.5  # degC; independent of contour boundaries and data limits
 MAP_EXTENT = (108.0, 125.0, 30.0, 48.0)
 NCHN_BOX = (114.0, 119.0, 35.0, 44.0)
 OUT_DIR = Path("/data1/huangy/fig6/NC/v12")
@@ -195,6 +196,11 @@ def compute_anomaly_maps():
     return result, {"event": event_qc, "background": records}
 
 
+def _window_display_label(key):
+    start, end = (pd.Timestamp(f"{EVENT_YEAR}-{date}") for date in WINDOWS[key])
+    return f"{start.day}–{end.day} {end.strftime('%B')}"
+
+
 def render_anomaly_maps(data, out_dir=OUT_DIR):
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -202,11 +208,15 @@ def render_anomaly_maps(data, out_dir=OUT_DIR):
     limit = max(1.0, float(np.ceil(maximum)))
     levels = np.linspace(-limit, limit, 21)
     norm = TwoSlopeNorm(vmin=-limit, vcenter=0, vmax=limit)
+    tick_indices = np.arange(np.ceil(-limit / COLORBAR_TICK_STEP),
+                             np.floor(limit / COLORBAR_TICK_STEP) + 1)
+    colorbar_ticks = tick_indices * COLORBAR_TICK_STEP
     crs = ccrs.PlateCarree()
     with plt.rc_context(RC):
         fig = plt.figure(figsize=FIG_SIZE)
         gs = fig.add_gridspec(2, 2, height_ratios=[1, 0.045], wspace=0.18, hspace=0.20)
-        for index, (key, title) in enumerate(zip(WINDOWS, ["14–17 June 2023", "22–24 June 2023"])):
+        for index, key in enumerate(WINDOWS):
+            title = f"{_window_display_label(key)} {EVENT_YEAR}"
             ax = fig.add_subplot(gs[0, index], projection=crs)
             field = data[f"{key}_anomaly"]
             mesh = ax.contourf(field.lon, field.lat, field, levels=levels, norm=norm,
@@ -225,7 +235,8 @@ def render_anomaly_maps(data, out_dir=OUT_DIR):
             ax.yaxis.set_major_formatter(LatitudeFormatter())
             ax.tick_params(labelsize=8)
             ax.set_title(f"({chr(97+index)}) {title}", loc="left", fontsize=9.6)
-        cbar = fig.colorbar(mesh, cax=fig.add_subplot(gs[1, :]), orientation="horizontal")
+        cbar = fig.colorbar(mesh, cax=fig.add_subplot(gs[1, :]), orientation="horizontal",
+                            ticks=colorbar_ticks, format="%g")
         cbar.set_label(r"$T_{\max}$ anomaly (°C)", fontsize=9.5)
         cbar.ax.tick_params(labelsize=8)
         fig.subplots_adjust(left=0.08, right=0.97, top=0.92, bottom=0.18)
@@ -233,7 +244,8 @@ def render_anomaly_maps(data, out_dir=OUT_DIR):
         fig.savefig(png, dpi=DPI, facecolor="white")
         fig.savefig(pdf, facecolor="white")
         plt.close(fig)
-    return {"png": str(png), "pdf": str(pdf), "color_limits_degC": [-limit, limit]}
+    return {"png": str(png), "pdf": str(pdf), "color_limits_degC": [-limit, limit],
+            "colorbar_ticks_degC": colorbar_ticks.tolist(), "colorbar_tick_step_degC": COLORBAR_TICK_STEP}
 
 
 def run_two_heatwave_anomaly_cell():
@@ -241,8 +253,9 @@ def run_two_heatwave_anomaly_cell():
     outputs = render_anomaly_maps(data)
     cache = OUT_DIR / f"{PREFIX}.nc"
     data.to_netcdf(cache)
-    caption = ("ERA5 daily maximum 2-m temperature anomalies during the 2023 North China "
-               "heatwaves: (a) 14–17 June and (b) 22–24 June. At each grid point, the 2023 "
+    caption = ("ERA5 daily maximum 2-m temperature anomalies for two averaging windows "
+               f"during the 2023 North China heatwave: (a) {_window_display_label('first')} "
+               f"and (b) {_window_display_label('second')}. At each grid point, the 2023 "
                "window mean of BJT (UTC+8) daily maxima is referenced to the same-window "
                "1979–2022 climatology, obtained by equally averaging 44 annual window means. "
                "Both panels share a zero-centered symmetric color scale; dashed boxes mark "
